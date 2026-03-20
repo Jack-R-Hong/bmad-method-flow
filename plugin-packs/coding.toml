@@ -1,0 +1,37 @@
+# coding — Full-stack AI coding pack with BMAD agents
+# Install with: pulse plugin install-pack coding
+
+[pack]
+name = "coding"
+description = "Full-stack AI coding: Claude Code + BMAD agents + Git automation"
+version = "0.1.0"
+author = "Jack"
+
+[plugins]
+provider-claude-code = { version = ">=0.1.0", source = "local:../pulse-plugins/provider-claude-code" }
+git-ops              = { version = ">=0.1.0", source = "local:../pulse-plugins/git-ops" }
+git-worktree         = { version = ">=0.1.0", source = "local:../pulse-plugins/git-worktree" }
+bmad-method          = { version = ">=0.1.0", source = "local:../pulse-plugins/bmad-method" }
+
+[workflows]
+include = [
+  "config/workflows/coding-feature-dev.yaml",
+  "config/workflows/coding-bug-fix.yaml",
+  "config/workflows/coding-review.yaml",
+  "config/workflows/coding-refactor.yaml",
+  "config/workflows/coding-story-dev.yaml",
+  "config/workflows/coding-quick-dev.yaml",
+  "config/workflows/bootstrap-plugin.yaml",
+  "config/workflows/bootstrap-rebuild.yaml",
+  "config/workflows/bootstrap-cycle.yaml",
+]
+
+[prerequisites]
+claude-cli = { check = "claude --version", install_hint = "npm install -g @anthropic-ai/claude-code" }
+git        = { check = "git --version", min_version = "2.20" }
+
+[config.defaults]
+"provider-claude-code.default_model" = "sonnet"
+"provider-claude-code.max_budget_usd" = 10.00
+"bmad-method.communication_language" = "English"
+"bmad-method.user_name" = "Jack"

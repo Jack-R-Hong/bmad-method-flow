@@ -1,0 +1,24 @@
+# Build artifacts
+target/
+*.wasm
+
+# Plugin binaries (rebuilt from source)
+config/plugins/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output artifacts (generated)
+_bmad-output/
+
+# Database
+*.db
+*.db-shm
+*.db-wal

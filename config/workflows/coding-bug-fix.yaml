@@ -1,0 +1,58 @@
+name: coding-bug-fix
+version: 1
+description: "Bug fix workflow: analyze root cause → implement fix → edge-case review → commit"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-git-ops
+steps:
+  # Step 1: Architect analyzes the bug
+  - id: analyze_bug
+    type: agent
+    depends_on: []
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/architect. Analyze this bug report and identify:
+        1. Root cause (not just symptoms)
+        2. Affected components and blast radius
+        3. Recommended fix strategy with minimal risk
+      user_prompt_template: "Analyze bug: {{input}}"
+      max_tokens: 4096
+
+  # Step 2: Implement the fix
+  - id: implement_fix
+    type: agent
+    depends_on: [analyze_bug]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are a senior developer fixing a bug.
+        Fix the root cause, not just symptoms. Add regression tests to prevent recurrence.
+      user_prompt_template: "Fix the bug based on root cause analysis: {{input}}"
+      max_tokens: 4096
+      context_from: [analyze_bug]
+
+  # Step 3: QA edge case review
+  - id: edge_case_review
+    type: agent
+    depends_on: [implement_fix]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa. Hunt for unhandled edge cases and verify the fix is complete.
+        Check boundary conditions, error paths, and concurrent access scenarios.
+      user_prompt_template: "Review this bug fix for completeness and edge cases"
+      max_tokens: 4096
+      context_from: [implement_fix]
+
+  # Step 4: Commit the fix
+  - id: git_commit
+    type: function
+    depends_on: [edge_case_review]
+    executor: plugin-git-ops
+    config:
+      command: ["git", "add", "-A"]

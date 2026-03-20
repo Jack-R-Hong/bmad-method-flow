@@ -1,0 +1,47 @@
+name: coding-review
+version: 1
+description: "Multi-layer code review: adversarial + edge-case analysis in parallel, then synthesis"
+requires:
+  - plugin: bmad-method
+steps:
+  # Parallel review layer 1: Adversarial review
+  - id: adversarial_review
+    type: agent
+    depends_on: []
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/architect performing adversarial code review.
+        Look for security vulnerabilities, performance bottlenecks, design flaws,
+        and violations of SOLID principles. Be thorough and critical.
+      user_prompt_template: "Perform critical adversarial review of: {{input}}"
+      max_tokens: 4096
+
+  # Parallel review layer 2: Edge case hunting
+  - id: edge_case_review
+    type: agent
+    depends_on: []
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa performing edge case analysis.
+        Walk every branching path and boundary condition. Report only unhandled edge cases.
+        Check: null/empty inputs, integer overflow, concurrency, resource exhaustion.
+      user_prompt_template: "Hunt for unhandled edge cases in: {{input}}"
+      max_tokens: 4096
+
+  # Synthesize findings from both parallel reviews
+  - id: review_synthesis
+    type: agent
+    depends_on: [adversarial_review, edge_case_review]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/sm. Synthesize code review findings into a single prioritized report.
+        Categorize by severity (critical/high/medium/low) and provide actionable fix suggestions.
+      user_prompt_template: "Synthesize review findings into a prioritized action list"
+      max_tokens: 4096
+      context_from: [adversarial_review, edge_case_review]

@@ -1,0 +1,46 @@
+name: coding-quick-dev
+version: 1
+description: "Quick development: rapid spec → implement → commit (minimal ceremony)"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-git-ops
+steps:
+  # Step 1: Quick Flow Solo Dev creates lean spec
+  - id: quick_spec
+    type: agent
+    depends_on: []
+    executor: bmad-method
+    config:
+      model_tier: fast
+      system_prompt: |
+        You are bmad/quick-flow-solo-dev. Create a minimal but complete tech spec:
+        - What to build (scope boundary)
+        - Key implementation decisions
+        - Files to create/modify
+        - Test approach (1-2 sentences)
+        Keep it lean. No bureaucracy.
+      user_prompt_template: "Quick spec for: {{input}}"
+      max_tokens: 2048
+
+  # Step 2: Implement immediately
+  - id: implement
+    type: agent
+    depends_on: [quick_spec]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are a fast-moving developer. Implement cleanly and efficiently per the spec.
+        Ship working code with basic test coverage.
+      user_prompt_template: "Implement: {{input}}"
+      max_tokens: 4096
+      context_from: [quick_spec]
+
+  # Step 3: Commit
+  - id: git_commit
+    type: function
+    depends_on: [implement]
+    executor: plugin-git-ops
+    config:
+      command: ["git", "add", "-A"]
