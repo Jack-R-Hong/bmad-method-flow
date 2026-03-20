@@ -145,11 +145,35 @@ impl DashboardExtensionPlugin for CodingPackPlugin {
                 "nav_order": 0,
                 "description": "Pack health, workflows, plugins, and AI agents at a glance",
                 "layout": {
-                    "type": "custom",
-                    "value": {
-                        "component": "coding-pack-overview",
-                        "features": ["status", "workflows", "plugins", "agents"]
-                    }
+                    "type": "detail",
+                    "sections": [
+                        {
+                            "id": "health",
+                            "title": "Pack Health",
+                            "fields": [
+                                { "key": "valid", "label": "Valid" },
+                                { "key": "plugins_ok", "label": "Plugins OK" },
+                                { "key": "workflows_found", "label": "Workflows Found" }
+                            ]
+                        },
+                        {
+                            "id": "workflows",
+                            "title": "Workflows",
+                            "fields": [
+                                { "key": "workflow_count", "label": "Total Workflows" },
+                                { "key": "workflow_categories", "label": "Categories" }
+                            ]
+                        },
+                        {
+                            "id": "plugins",
+                            "title": "Installed Plugins",
+                            "fields": [
+                                { "key": "plugins.count", "label": "Plugin Count" },
+                                { "key": "plugins.plugins", "label": "Plugin List" }
+                            ]
+                        }
+                    ],
+                    "data_endpoint": "status"
                 }
             },
             {
@@ -510,7 +534,6 @@ mod tests {
             .iter()
             .map(|p| p["layout"]["type"].as_str().unwrap())
             .collect();
-        assert!(layout_types.contains(&"custom"), "missing custom layout");
         assert!(layout_types.contains(&"table"), "missing table layout");
         assert!(layout_types.contains(&"detail"), "missing detail layout");
         assert!(layout_types.contains(&"form"), "missing form layout");
@@ -519,7 +542,7 @@ mod tests {
         // Overview page
         assert_eq!(pages[0]["id"], "overview");
         assert_eq!(pages[0]["path"], "/overview");
-        assert_eq!(pages[0]["layout"]["type"], "custom");
+        assert_eq!(pages[0]["layout"]["type"], "detail");
 
         // Workflows table
         assert_eq!(pages[1]["id"], "workflows");

@@ -15,11 +15,35 @@
       "nav_order": 0,
       "description": "Pack health, workflows, plugins, and AI agents at a glance",
       "layout": {
-        "type": "custom",
-        "value": {
-          "component": "coding-pack-overview",
-          "features": ["status", "workflows", "plugins", "agents"]
-        }
+        "type": "detail",
+        "sections": [
+          {
+            "id": "health",
+            "title": "Pack Health",
+            "fields": [
+              { "key": "valid", "label": "Valid" },
+              { "key": "plugins_ok", "label": "Plugins OK" },
+              { "key": "workflows_found", "label": "Workflows Found" }
+            ]
+          },
+          {
+            "id": "workflows",
+            "title": "Workflows",
+            "fields": [
+              { "key": "workflow_count", "label": "Total Workflows" },
+              { "key": "workflow_categories", "label": "Categories" }
+            ]
+          },
+          {
+            "id": "plugins",
+            "title": "Installed Plugins",
+            "fields": [
+              { "key": "plugins.count", "label": "Plugin Count" },
+              { "key": "plugins.plugins", "label": "Plugin List" }
+            ]
+          }
+        ],
+        "data_endpoint": "status"
       }
     },
     {

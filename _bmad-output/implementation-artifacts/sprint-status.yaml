@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-18
-last_updated: 2026-03-20T12:00:00Z
+last_updated: 2026-03-21
 project: bmad-method-flow
 project_key: NOKEY
 tracking_system: file-system
@@ -49,7 +49,7 @@ development_status:
   1-3-cli-execution-and-structured-output-parsing: done
   1-4-permission-modes-and-safety-controls: done
   1-5-session-continuity-and-context-management: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   # Epic 2: Git Operations Plugin (git-ops)
   epic-2: done
@@ -57,7 +57,7 @@ development_status:
   2-2-branch-management-and-push-operations: done
   2-3-destructive-operation-safety-guards: done
   2-4-platform-detection-and-pr-mr-creation: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   # Epic 3: Development Workflow Templates & Orchestration
   epic-3: done
@@ -65,25 +65,25 @@ development_status:
   3-2-quick-implementation-and-test-workflow: done
   3-3-code-review-and-quality-gate-workflow: done
   3-4-git-commit-and-pr-pipeline: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
 
   # Epic 4: Agent Persona System (bmad-method)
   epic-4: done
   4-1-wasm-crate-setup-and-wit-interface: done
   4-2-agent-persona-definitions-and-selection: done
   4-3-persona-output-and-claude-step-integration: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
 
   # Epic 5: Observability & Plugin Ecosystem
   epic-5: done
   5-1-plugin-health-status-and-reporting: done
   5-2-dashboard-extensions-for-auto-dev-monitoring: done
   5-3-plugin-extensibility-and-pack-installation: done
-  epic-5-retrospective: optional
+  epic-5-retrospective: done
 
   # Epic 6: Knowledge Graph Memory Plugin (plugin-memory)
   epic-6: done
   6-1-multi-provider-config-and-plugin-shell-wrapper: done
   6-2-coding-workflow-memory-step-integration: done
   6-3-standalone-memory-index-workflow-and-pack-integration: done
-  epic-6-retrospective: optional
+  epic-6-retrospective: done
