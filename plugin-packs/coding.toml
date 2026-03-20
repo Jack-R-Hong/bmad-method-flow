@@ -28,6 +28,28 @@ include = [
   "config/workflows/bootstrap-cycle.yaml",
 ]
 
+[dashboard]
+has_extension = true
+source = "dashboard/"
+manifest = "manifest.json"
+display_customizations = "display-customizations.json"
+
+# SDK-rendered pages (auto-discovered via manifest)
+# table:  /plugins/plugin-coding-pack/workflows
+# table:  /plugins/plugin-coding-pack/agents
+# detail: /plugins/plugin-coding-pack/status
+# form:   /plugins/plugin-coding-pack/execute
+# stream: /plugins/plugin-coding-pack/logs
+# custom: /plugins/plugin-coding-pack/overview → uses custom component below
+
+# Custom component for overview page (SDK custom layout renderer)
+routes = ["routes/coding-pack/+page.svelte"]
+stores = ["stores/codingPack.svelte.ts"]
+components = [
+  "components/CodingPackStatus.svelte",
+  "components/ExecuteWorkflowDialog.svelte",
+]
+
 [prerequisites]
 claude-cli = { check = "claude --version", install_hint = "npm install -g @anthropic-ai/claude-code" }
 git        = { check = "git --version", min_version = "2.20" }

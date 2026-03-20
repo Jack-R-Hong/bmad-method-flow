@@ -1,0 +1,13 @@
+{
+  "items": [
+    { "id": "architect", "name": "Winston", "role": "System Architect", "assigned_workflows": 8 },
+    { "id": "dev", "name": "Amelia", "role": "Developer", "assigned_workflows": 6 },
+    { "id": "pm", "name": "John", "role": "Product Manager", "assigned_workflows": 3 },
+    { "id": "qa", "name": "Quinn", "role": "QA Engineer", "assigned_workflows": 7 },
+    { "id": "sm", "name": "Bob", "role": "Scrum Master", "assigned_workflows": 2 },
+    { "id": "quick-flow-solo-dev", "name": "Barry", "role": "Quick Flow Specialist", "assigned_workflows": 1 },
+    { "id": "analyst", "name": "Mary", "role": "Business Analyst", "assigned_workflows": 2 },
+    { "id": "ux-designer", "name": "Sally", "role": "UX Designer", "assigned_workflows": 1 },
+    { "id": "tech-writer", "name": "Paige", "role": "Technical Writer", "assigned_workflows": 1 }
+  ]
+}

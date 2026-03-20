@@ -1,0 +1,76 @@
+{
+  "items": [
+    {
+      "id": "coding-quick-dev",
+      "description": "Quick development: rapid spec → implement → commit",
+      "category": "coding",
+      "step_count": 3,
+      "requires": "provider-claude-code, bmad-method, plugin-git-ops",
+      "last_run": "2026-03-21T08:30:00Z"
+    },
+    {
+      "id": "coding-feature-dev",
+      "description": "Full feature dev: architect → worktree → dev → QA → commit",
+      "category": "coding",
+      "step_count": 5,
+      "requires": "provider-claude-code, bmad-method, plugin-git-ops, plugin-git-worktree",
+      "last_run": "2026-03-20T14:15:00Z"
+    },
+    {
+      "id": "coding-story-dev",
+      "description": "Story-driven: SM prepares → architect → worktree → dev → QA → commit",
+      "category": "coding",
+      "step_count": 6,
+      "requires": "provider-claude-code, bmad-method, plugin-git-ops, plugin-git-worktree",
+      "last_run": "—"
+    },
+    {
+      "id": "coding-bug-fix",
+      "description": "Bug fix: root cause analysis → fix → edge-case review → commit",
+      "category": "coding",
+      "step_count": 4,
+      "requires": "provider-claude-code, bmad-method, plugin-git-ops",
+      "last_run": "2026-03-21T10:00:00Z"
+    },
+    {
+      "id": "coding-refactor",
+      "description": "Safe refactoring: plan → execute → regression check → commit",
+      "category": "coding",
+      "step_count": 4,
+      "requires": "provider-claude-code, bmad-method, plugin-git-ops",
+      "last_run": "—"
+    },
+    {
+      "id": "coding-review",
+      "description": "Multi-layer code review: adversarial + edge-case → synthesis",
+      "category": "coding",
+      "step_count": 3,
+      "requires": "bmad-method",
+      "last_run": "2026-03-21T09:45:00Z"
+    },
+    {
+      "id": "bootstrap-plugin",
+      "description": "Self-dev: plan → implement → test → QA → commit",
+      "category": "bootstrap",
+      "step_count": 5,
+      "requires": "provider-claude-code, bmad-method, plugin-git-ops",
+      "last_run": "2026-03-20T16:00:00Z"
+    },
+    {
+      "id": "bootstrap-rebuild",
+      "description": "Rebuild all plugins: build → install → validate",
+      "category": "bootstrap",
+      "step_count": 3,
+      "requires": "provider-claude-code",
+      "last_run": "2026-03-21T07:00:00Z"
+    },
+    {
+      "id": "bootstrap-cycle",
+      "description": "Full self-evolution: plan → implement → test → review → rebuild → install → validate → commit",
+      "category": "bootstrap",
+      "step_count": 8,
+      "requires": "provider-claude-code, bmad-method, plugin-git-ops",
+      "last_run": "—"
+    }
+  ]
+}

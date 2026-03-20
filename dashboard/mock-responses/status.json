@@ -1,0 +1,27 @@
+{
+  "valid": true,
+  "plugins_ok": 5,
+  "workflows_found": 9,
+  "validation": {
+    "valid": true,
+    "issues": []
+  },
+  "plugins": {
+    "count": 5,
+    "plugins": [
+      { "name": "bmad-method", "size_bytes": 4521984, "executable": true },
+      { "name": "provider-claude-code", "size_bytes": 3145728, "executable": true },
+      { "name": "plugin-git-ops", "size_bytes": 1048576, "executable": true },
+      { "name": "plugin-git-worktree", "size_bytes": 1572864, "executable": true },
+      { "name": "plugin-memory", "size_bytes": 2097152, "executable": true }
+    ]
+  },
+  "workflows": {
+    "count": 9,
+    "workflows": [
+      "coding-quick-dev", "coding-feature-dev", "coding-story-dev",
+      "coding-bug-fix", "coding-refactor", "coding-review",
+      "bootstrap-plugin", "bootstrap-rebuild", "bootstrap-cycle"
+    ]
+  }
+}

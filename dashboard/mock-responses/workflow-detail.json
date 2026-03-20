@@ -1,0 +1,12 @@
+{
+  "id": "coding-feature-dev",
+  "description": "Full feature dev: architect → worktree → dev → QA → commit",
+  "category": "coding",
+  "requires": "provider-claude-code, bmad-method, plugin-git-ops, plugin-git-worktree",
+  "step_count": 5,
+  "step_pipeline": "architect_design (agent) → create_worktree (function) → dev_implement (agent) → qa_review (agent) → git_commit (function)",
+  "parallel_groups": 0,
+  "last_run": "2026-03-20T14:15:00Z",
+  "total_runs": 12,
+  "success_rate": "92%"
+}

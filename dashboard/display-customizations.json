@@ -1,0 +1,71 @@
+{
+  "data": [
+    {
+      "plugin_name": "plugin-coding-pack",
+      "customization": {
+        "id": "coding-pack-health",
+        "title": "Coding Pack",
+        "target_view": "workflow",
+        "render_priority": 10,
+        "customization": {
+          "type": "badge",
+          "key": "pack_status",
+          "label": "Pack",
+          "color_mapping": {
+            "healthy": "#10b981",
+            "degraded": "#f59e0b",
+            "error": "#ef4444",
+            "default": "#64748b"
+          }
+        },
+        "data_endpoint": "status/health"
+      }
+    },
+    {
+      "plugin_name": "plugin-coding-pack",
+      "customization": {
+        "id": "coding-workflow-info",
+        "title": "Workflow Details",
+        "target_view": "task",
+        "render_priority": 20,
+        "customization": {
+          "type": "fields",
+          "fields": [
+            { "key": "workflow_id", "label": "Workflow" },
+            { "key": "step_id", "label": "Current Step" },
+            { "key": "executor", "label": "Executor" },
+            { "key": "model_tier", "label": "Model Tier" }
+          ]
+        },
+        "data_endpoint": "tasks/{task_id}/workflow-context"
+      }
+    },
+    {
+      "plugin_name": "plugin-coding-pack",
+      "customization": {
+        "id": "coding-pack-agents",
+        "title": "BMAD Agent",
+        "target_view": "task",
+        "render_priority": 30,
+        "customization": {
+          "type": "badge",
+          "key": "agent_name",
+          "label": "Agent",
+          "color_mapping": {
+            "Winston": "#3b82f6",
+            "Amelia": "#10b981",
+            "John": "#8b5cf6",
+            "Quinn": "#f59e0b",
+            "Bob": "#06b6d4",
+            "Barry": "#ef4444",
+            "Mary": "#ec4899",
+            "Sally": "#14b8a6",
+            "Paige": "#a855f7",
+            "default": "#64748b"
+          }
+        },
+        "data_endpoint": "tasks/{task_id}/agent-info"
+      }
+    }
+  ]
+}

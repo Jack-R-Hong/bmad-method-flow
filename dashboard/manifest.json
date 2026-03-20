@@ -1,0 +1,234 @@
+{
+  "metadata": {
+    "name": "plugin-coding-pack",
+    "version": "0.1.0",
+    "api_version": "1.0",
+    "author": "Jack",
+    "description": "AI-driven software development workflows powered by BMAD methodology"
+  },
+  "pages": [
+    {
+      "id": "overview",
+      "title": "Coding Pack",
+      "path": "/overview",
+      "icon": "package",
+      "nav_order": 0,
+      "description": "Pack health, workflows, plugins, and AI agents at a glance",
+      "layout": {
+        "type": "custom",
+        "value": {
+          "component": "coding-pack-overview",
+          "features": ["status", "workflows", "plugins", "agents"]
+        }
+      }
+    },
+    {
+      "id": "workflows",
+      "title": "Workflows",
+      "path": "/workflows",
+      "icon": "git-branch",
+      "nav_order": 1,
+      "description": "Browse and manage all coding and bootstrap workflows",
+      "layout": {
+        "type": "table",
+        "columns": [
+          { "key": "id", "label": "Workflow ID", "sortable": true },
+          { "key": "description", "label": "Description", "sortable": false },
+          { "key": "category", "label": "Category", "sortable": true },
+          { "key": "step_count", "label": "Steps", "sortable": true },
+          { "key": "requires", "label": "Required Plugins", "sortable": false },
+          { "key": "last_run", "label": "Last Run", "sortable": true }
+        ],
+        "data_endpoint": "workflows/list",
+        "row_actions": [
+          {
+            "id": "execute",
+            "label": "Execute",
+            "method": "POST",
+            "endpoint": "workflows/{id}/execute"
+          },
+          {
+            "id": "view",
+            "label": "View Steps",
+            "method": "GET",
+            "endpoint": "workflows/{id}"
+          }
+        ],
+        "bulk_actions": []
+      }
+    },
+    {
+      "id": "workflow-detail",
+      "title": "Workflow Detail",
+      "path": "/workflows/:id",
+      "icon": "git-branch",
+      "nav_order": -1,
+      "description": "Detailed workflow steps and execution history",
+      "layout": {
+        "type": "detail",
+        "sections": [
+          {
+            "id": "info",
+            "title": "Workflow Info",
+            "fields": [
+              { "key": "id", "label": "Workflow ID" },
+              { "key": "description", "label": "Description" },
+              { "key": "category", "label": "Category" },
+              { "key": "requires", "label": "Required Plugins" }
+            ]
+          },
+          {
+            "id": "steps",
+            "title": "Pipeline Steps",
+            "fields": [
+              { "key": "step_count", "label": "Total Steps" },
+              { "key": "step_pipeline", "label": "Pipeline" },
+              { "key": "parallel_groups", "label": "Parallel Groups" }
+            ]
+          },
+          {
+            "id": "recent",
+            "title": "Recent Executions",
+            "fields": [
+              { "key": "last_run", "label": "Last Run" },
+              { "key": "total_runs", "label": "Total Runs" },
+              { "key": "success_rate", "label": "Success Rate" }
+            ]
+          }
+        ],
+        "data_endpoint": "workflows/{id}"
+      }
+    },
+    {
+      "id": "agents",
+      "title": "AI Agents",
+      "path": "/agents",
+      "icon": "bot",
+      "nav_order": 2,
+      "description": "BMAD AI team members and their roles",
+      "layout": {
+        "type": "table",
+        "columns": [
+          { "key": "id", "label": "Agent ID", "sortable": true },
+          { "key": "name", "label": "Name", "sortable": true },
+          { "key": "role", "label": "Role", "sortable": true },
+          { "key": "assigned_workflows", "label": "Workflows", "sortable": true }
+        ],
+        "data_endpoint": "agents/list",
+        "row_actions": [
+          {
+            "id": "view",
+            "label": "View",
+            "method": "GET",
+            "endpoint": "agents/{id}"
+          }
+        ],
+        "bulk_actions": []
+      }
+    },
+    {
+      "id": "status",
+      "title": "Pack Status",
+      "path": "/status",
+      "icon": "activity",
+      "nav_order": 3,
+      "description": "Pack health, validation results, and plugin status",
+      "layout": {
+        "type": "detail",
+        "sections": [
+          {
+            "id": "health",
+            "title": "Pack Health",
+            "fields": [
+              { "key": "valid", "label": "Valid" },
+              { "key": "plugins_ok", "label": "Plugins OK" },
+              { "key": "workflows_found", "label": "Workflows Found" }
+            ]
+          },
+          {
+            "id": "plugins",
+            "title": "Installed Plugins",
+            "fields": [
+              { "key": "plugins.count", "label": "Plugin Count" },
+              { "key": "plugins.plugins", "label": "Plugin List" }
+            ]
+          },
+          {
+            "id": "validation",
+            "title": "Validation",
+            "fields": [
+              { "key": "validation.valid", "label": "Passed" },
+              { "key": "validation.issues", "label": "Issues" }
+            ]
+          }
+        ],
+        "data_endpoint": "status"
+      }
+    },
+    {
+      "id": "execute",
+      "title": "Execute Workflow",
+      "path": "/execute",
+      "icon": "play",
+      "nav_order": 4,
+      "description": "Trigger a workflow execution",
+      "layout": {
+        "type": "form",
+        "fields": [
+          {
+            "id": "workflow_id",
+            "label": "Workflow",
+            "field_type": {
+              "select": {
+                "options": [
+                  "coding-quick-dev",
+                  "coding-feature-dev",
+                  "coding-story-dev",
+                  "coding-bug-fix",
+                  "coding-refactor",
+                  "coding-review",
+                  "bootstrap-plugin",
+                  "bootstrap-rebuild",
+                  "bootstrap-cycle"
+                ]
+              }
+            },
+            "required": true
+          },
+          {
+            "id": "input",
+            "label": "Task Description",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "id": "target",
+            "label": "Target Path (for code-review)",
+            "field_type": "text",
+            "required": false
+          }
+        ],
+        "submit_endpoint": "workflows/execute"
+      }
+    },
+    {
+      "id": "logs",
+      "title": "Execution Logs",
+      "path": "/logs",
+      "icon": "terminal",
+      "nav_order": 5,
+      "description": "Real-time execution event stream",
+      "layout": {
+        "type": "stream",
+        "event_endpoint": "executions/stream",
+        "event_types": [
+          "execution_start",
+          "step_start",
+          "step_complete",
+          "step_error",
+          "execution_complete"
+        ]
+      }
+    }
+  ]
+}

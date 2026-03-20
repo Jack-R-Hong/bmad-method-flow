@@ -3,7 +3,9 @@ pub mod util;
 pub mod validator;
 
 use pulse_plugin_sdk::error::WitPluginError;
-use pulse_plugin_sdk::wit_traits::{PluginLifecycle, StepExecutorPlugin};
+use pulse_plugin_sdk::wit_traits::{
+    DashboardExtensionPlugin, PluginLifecycle, StepExecutorPlugin,
+};
 use pulse_plugin_sdk::wit_types::{PluginDependency, PluginInfo, StepConfig, StepResult, TaskInput};
 use tracing::info;
 
@@ -132,6 +134,282 @@ impl StepExecutorPlugin for CodingPackPlugin {
     }
 }
 
+impl DashboardExtensionPlugin for CodingPackPlugin {
+    fn get_pages_json(&self) -> String {
+        serde_json::json!([
+            {
+                "id": "overview",
+                "title": "Coding Pack",
+                "path": "/overview",
+                "icon": "package",
+                "nav_order": 0,
+                "description": "Pack health, workflows, plugins, and AI agents at a glance",
+                "layout": {
+                    "type": "custom",
+                    "value": {
+                        "component": "coding-pack-overview",
+                        "features": ["status", "workflows", "plugins", "agents"]
+                    }
+                }
+            },
+            {
+                "id": "workflows",
+                "title": "Workflows",
+                "path": "/workflows",
+                "icon": "git-branch",
+                "nav_order": 1,
+                "description": "Browse and manage all coding and bootstrap workflows",
+                "layout": {
+                    "type": "table",
+                    "columns": [
+                        { "key": "id", "label": "Workflow ID", "sortable": true },
+                        { "key": "description", "label": "Description", "sortable": false },
+                        { "key": "category", "label": "Category", "sortable": true },
+                        { "key": "step_count", "label": "Steps", "sortable": true },
+                        { "key": "requires", "label": "Required Plugins", "sortable": false },
+                        { "key": "last_run", "label": "Last Run", "sortable": true }
+                    ],
+                    "data_endpoint": "workflows/list",
+                    "row_actions": [
+                        { "id": "execute", "label": "Execute", "method": "POST", "endpoint": "workflows/{id}/execute" },
+                        { "id": "view", "label": "View Steps", "method": "GET", "endpoint": "workflows/{id}" }
+                    ],
+                    "bulk_actions": []
+                }
+            },
+            {
+                "id": "workflow-detail",
+                "title": "Workflow Detail",
+                "path": "/workflows/:id",
+                "icon": "git-branch",
+                "nav_order": -1,
+                "description": "Detailed workflow steps and execution history",
+                "layout": {
+                    "type": "detail",
+                    "sections": [
+                        {
+                            "id": "info",
+                            "title": "Workflow Info",
+                            "fields": [
+                                { "key": "id", "label": "Workflow ID" },
+                                { "key": "description", "label": "Description" },
+                                { "key": "category", "label": "Category" },
+                                { "key": "requires", "label": "Required Plugins" }
+                            ]
+                        },
+                        {
+                            "id": "steps",
+                            "title": "Pipeline Steps",
+                            "fields": [
+                                { "key": "step_count", "label": "Total Steps" },
+                                { "key": "step_pipeline", "label": "Pipeline" },
+                                { "key": "parallel_groups", "label": "Parallel Groups" }
+                            ]
+                        },
+                        {
+                            "id": "recent",
+                            "title": "Recent Executions",
+                            "fields": [
+                                { "key": "last_run", "label": "Last Run" },
+                                { "key": "total_runs", "label": "Total Runs" },
+                                { "key": "success_rate", "label": "Success Rate" }
+                            ]
+                        }
+                    ],
+                    "data_endpoint": "workflows/{id}"
+                }
+            },
+            {
+                "id": "agents",
+                "title": "AI Agents",
+                "path": "/agents",
+                "icon": "bot",
+                "nav_order": 2,
+                "description": "BMAD AI team members and their roles",
+                "layout": {
+                    "type": "table",
+                    "columns": [
+                        { "key": "id", "label": "Agent ID", "sortable": true },
+                        { "key": "name", "label": "Name", "sortable": true },
+                        { "key": "role", "label": "Role", "sortable": true },
+                        { "key": "assigned_workflows", "label": "Workflows", "sortable": true }
+                    ],
+                    "data_endpoint": "agents/list",
+                    "row_actions": [
+                        { "id": "view", "label": "View", "method": "GET", "endpoint": "agents/{id}" }
+                    ],
+                    "bulk_actions": []
+                }
+            },
+            {
+                "id": "status",
+                "title": "Pack Status",
+                "path": "/status",
+                "icon": "activity",
+                "nav_order": 3,
+                "description": "Pack health, validation results, and plugin status",
+                "layout": {
+                    "type": "detail",
+                    "sections": [
+                        {
+                            "id": "health",
+                            "title": "Pack Health",
+                            "fields": [
+                                { "key": "valid", "label": "Valid" },
+                                { "key": "plugins_ok", "label": "Plugins OK" },
+                                { "key": "workflows_found", "label": "Workflows Found" }
+                            ]
+                        },
+                        {
+                            "id": "plugins",
+                            "title": "Installed Plugins",
+                            "fields": [
+                                { "key": "plugins.count", "label": "Plugin Count" },
+                                { "key": "plugins.plugins", "label": "Plugin List" }
+                            ]
+                        },
+                        {
+                            "id": "validation",
+                            "title": "Validation",
+                            "fields": [
+                                { "key": "validation.valid", "label": "Passed" },
+                                { "key": "validation.issues", "label": "Issues" }
+                            ]
+                        }
+                    ],
+                    "data_endpoint": "status"
+                }
+            },
+            {
+                "id": "execute",
+                "title": "Execute Workflow",
+                "path": "/execute",
+                "icon": "play",
+                "nav_order": 4,
+                "description": "Trigger a workflow execution",
+                "layout": {
+                    "type": "form",
+                    "fields": [
+                        {
+                            "id": "workflow_id",
+                            "label": "Workflow",
+                            "field_type": { "select": { "options": [
+                                "coding-quick-dev", "coding-feature-dev", "coding-story-dev",
+                                "coding-bug-fix", "coding-refactor", "coding-review",
+                                "bootstrap-plugin", "bootstrap-rebuild", "bootstrap-cycle"
+                            ]}},
+                            "required": true
+                        },
+                        { "id": "input", "label": "Task Description", "field_type": "textarea", "required": true },
+                        { "id": "target", "label": "Target Path (for code-review)", "field_type": "text", "required": false }
+                    ],
+                    "submit_endpoint": "workflows/execute"
+                }
+            },
+            {
+                "id": "logs",
+                "title": "Execution Logs",
+                "path": "/logs",
+                "icon": "terminal",
+                "nav_order": 5,
+                "description": "Real-time execution event stream",
+                "layout": {
+                    "type": "stream",
+                    "event_endpoint": "executions/stream",
+                    "event_types": ["execution_start", "step_start", "step_complete", "step_error", "execution_complete"]
+                }
+            }
+        ])
+        .to_string()
+    }
+
+    fn get_api_routes_json(&self) -> String {
+        serde_json::json!([
+            {
+                "prefix": "/api/v1/plugin-coding-pack",
+                "description": "Coding pack status, validation, and workflow management",
+                "endpoints": [
+                    "GET  /status          — Pack health and validation",
+                    "GET  /status/health    — Health badge data",
+                    "GET  /workflows/list   — All workflows as table data",
+                    "GET  /workflows/{id}   — Workflow detail with steps",
+                    "POST /workflows/{id}/execute — Trigger workflow execution",
+                    "GET  /agents/list      — BMAD agent roster",
+                    "GET  /agents/{id}      — Agent detail",
+                    "GET  /executions/stream — SSE execution event stream",
+                    "GET  /tasks/{task_id}/workflow-context — Task workflow context",
+                    "GET  /tasks/{task_id}/agent-info — Task agent info"
+                ]
+            }
+        ])
+        .to_string()
+    }
+
+    fn get_display_customizations_json(&self) -> String {
+        serde_json::json!([
+            {
+                "id": "coding-pack-health",
+                "title": "Coding Pack",
+                "target_view": "workflow",
+                "customization": {
+                    "type": "badge",
+                    "key": "pack_status",
+                    "label": "Pack",
+                    "color_mapping": {
+                        "healthy": "#10b981",
+                        "degraded": "#f59e0b",
+                        "error": "#ef4444",
+                        "default": "#64748b"
+                    }
+                },
+                "data_endpoint": "status/health",
+                "render_priority": 10
+            },
+            {
+                "id": "coding-workflow-info",
+                "title": "Workflow Details",
+                "target_view": "task",
+                "customization": {
+                    "type": "fields",
+                    "fields": [
+                        { "key": "workflow_id", "label": "Workflow" },
+                        { "key": "step_id", "label": "Current Step" },
+                        { "key": "executor", "label": "Executor" },
+                        { "key": "model_tier", "label": "Model Tier" }
+                    ]
+                },
+                "data_endpoint": "tasks/{task_id}/workflow-context",
+                "render_priority": 20
+            },
+            {
+                "id": "coding-pack-agent",
+                "title": "BMAD Agent",
+                "target_view": "task",
+                "customization": {
+                    "type": "badge",
+                    "key": "agent_name",
+                    "label": "Agent",
+                    "color_mapping": {
+                        "Winston": "#3b82f6",
+                        "Amelia": "#10b981",
+                        "John": "#8b5cf6",
+                        "Quinn": "#f59e0b",
+                        "Bob": "#06b6d4",
+                        "Barry": "#ef4444",
+                        "Mary": "#ec4899",
+                        "Sally": "#14b8a6",
+                        "Paige": "#a855f7",
+                        "default": "#64748b"
+                    }
+                },
+                "data_endpoint": "tasks/{task_id}/agent-info",
+                "render_priority": 30
+            }
+        ])
+        .to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +495,99 @@ mod tests {
         let config = StepConfig::new("s1", "agent");
         let err = plugin.execute(task, config).unwrap_err();
         assert_eq!(err.code, "invalid_input");
+    }
+
+    #[test]
+    fn dashboard_pages_json_is_valid() {
+        let plugin = CodingPackPlugin;
+        let json = plugin.get_pages_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let pages = parsed.as_array().unwrap();
+        assert_eq!(pages.len(), 7);
+
+        // Verify all SDK layout types are present
+        let layout_types: Vec<&str> = pages
+            .iter()
+            .map(|p| p["layout"]["type"].as_str().unwrap())
+            .collect();
+        assert!(layout_types.contains(&"custom"), "missing custom layout");
+        assert!(layout_types.contains(&"table"), "missing table layout");
+        assert!(layout_types.contains(&"detail"), "missing detail layout");
+        assert!(layout_types.contains(&"form"), "missing form layout");
+        assert!(layout_types.contains(&"stream"), "missing stream layout");
+
+        // Overview page
+        assert_eq!(pages[0]["id"], "overview");
+        assert_eq!(pages[0]["path"], "/overview");
+        assert_eq!(pages[0]["layout"]["type"], "custom");
+
+        // Workflows table
+        assert_eq!(pages[1]["id"], "workflows");
+        assert_eq!(pages[1]["layout"]["type"], "table");
+        let columns = pages[1]["layout"]["columns"].as_array().unwrap();
+        assert!(columns.len() >= 4);
+
+        // Workflow detail
+        assert_eq!(pages[2]["id"], "workflow-detail");
+        assert_eq!(pages[2]["layout"]["type"], "detail");
+        assert_eq!(pages[2]["nav_order"], -1); // hidden from nav
+
+        // Agents table
+        assert_eq!(pages[3]["id"], "agents");
+        assert_eq!(pages[3]["layout"]["type"], "table");
+
+        // Status detail
+        assert_eq!(pages[4]["id"], "status");
+        assert_eq!(pages[4]["layout"]["type"], "detail");
+
+        // Execute form
+        assert_eq!(pages[5]["id"], "execute");
+        assert_eq!(pages[5]["layout"]["type"], "form");
+        let fields = pages[5]["layout"]["fields"].as_array().unwrap();
+        assert!(fields.len() >= 2);
+
+        // Logs stream
+        assert_eq!(pages[6]["id"], "logs");
+        assert_eq!(pages[6]["layout"]["type"], "stream");
+    }
+
+    #[test]
+    fn dashboard_api_routes_json_is_valid() {
+        let plugin = CodingPackPlugin;
+        let json = plugin.get_api_routes_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let routes = parsed.as_array().unwrap();
+        assert_eq!(routes.len(), 1);
+        assert!(routes[0]["prefix"]
+            .as_str()
+            .unwrap()
+            .contains("plugin-coding-pack"));
+        // Verify endpoints are documented
+        let endpoints = routes[0]["endpoints"].as_array().unwrap();
+        assert!(endpoints.len() >= 5);
+    }
+
+    #[test]
+    fn dashboard_display_customizations_json_is_valid() {
+        let plugin = CodingPackPlugin;
+        let json = plugin.get_display_customizations_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let customs = parsed.as_array().unwrap();
+        assert_eq!(customs.len(), 3);
+
+        // Pack health badge on workflow view
+        assert_eq!(customs[0]["id"], "coding-pack-health");
+        assert_eq!(customs[0]["target_view"], "workflow");
+        assert_eq!(customs[0]["customization"]["type"], "badge");
+
+        // Workflow context fields on task view
+        assert_eq!(customs[1]["id"], "coding-workflow-info");
+        assert_eq!(customs[1]["target_view"], "task");
+        assert_eq!(customs[1]["customization"]["type"], "fields");
+
+        // Agent badge on task view
+        assert_eq!(customs[2]["id"], "coding-pack-agent");
+        assert_eq!(customs[2]["target_view"], "task");
+        assert_eq!(customs[2]["customization"]["type"], "badge");
     }
 }
