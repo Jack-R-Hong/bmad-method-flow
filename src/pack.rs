@@ -39,7 +39,7 @@ fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
 
     // Check required plugins
     let required_plugins = ["bmad-method", "provider-claude-code"];
-    let optional_plugins = ["plugin-git-worktree"];
+    let optional_plugins = ["plugin-git-worktree", "plugin-memory"];
 
     for plugin in &required_plugins {
         let path = format!("config/plugins/{}", plugin);

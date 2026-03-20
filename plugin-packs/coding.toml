@@ -12,6 +12,7 @@ provider-claude-code = { version = ">=0.1.0", source = "local:../pulse-plugins/p
 plugin-git-ops       = { version = ">=0.1.0", source = "local:../pulse-plugins/git-ops" }
 plugin-git-worktree  = { version = ">=0.1.0", source = "local:../pulse-plugins/git-worktree" }
 bmad-method          = { version = ">=0.1.0", source = "local:../pulse-plugins/bmad-method" }
+plugin-memory        = { version = ">=0.1.0", source = "local:config/plugins/plugin-memory", optional = true }
 
 [workflows]
 include = [
@@ -21,6 +22,7 @@ include = [
   "config/workflows/coding-refactor.yaml",
   "config/workflows/coding-story-dev.yaml",
   "config/workflows/coding-quick-dev.yaml",
+  "config/workflows/coding-memory-index.yaml",
   "config/workflows/bootstrap-plugin.yaml",
   "config/workflows/bootstrap-rebuild.yaml",
   "config/workflows/bootstrap-cycle.yaml",
@@ -29,9 +31,12 @@ include = [
 [prerequisites]
 claude-cli = { check = "claude --version", install_hint = "npm install -g @anthropic-ai/claude-code" }
 git        = { check = "git --version", min_version = "2.20" }
+npx        = { check = "npx --version", install_hint = "Install Node.js >= 18: https://nodejs.org" }
 
 [config.defaults]
 "provider-claude-code.default_model" = "sonnet"
 "provider-claude-code.max_budget_usd" = 10.00
 "bmad-method.communication_language" = "English"
 "bmad-method.user_name" = "Jack"
+"memory.provider" = "gitnexus"               # gitnexus | greptile | none
+"memory.auto_reindex" = true                  # re-index after each commit

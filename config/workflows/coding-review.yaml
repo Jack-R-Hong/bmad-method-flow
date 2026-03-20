@@ -3,11 +3,23 @@ version: 1
 description: "Multi-layer code review: adversarial + edge-case analysis in parallel, then synthesis"
 requires:
   - plugin: bmad-method
+  - plugin: plugin-memory
+    optional: true
 steps:
+  # Step 0 (optional): Knowledge graph context for review
+  - id: memory_context
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "query", "{{input}}"]
+      timeout_seconds: 60
+
   # Parallel review layer 1: Adversarial review
   - id: adversarial_review
     type: agent
-    depends_on: []
+    depends_on: [memory_context]
     executor: bmad-method
     config:
       model_tier: balanced
@@ -15,14 +27,16 @@ steps:
         You are bmad/architect performing adversarial code review.
         Look for security vulnerabilities, performance bottlenecks, design flaws,
         and violations of SOLID principles. Be thorough and critical.
+        Use knowledge graph context (if available) to understand call chains and dependencies.
       user_prompt_template: "Perform critical adversarial review of: {{input}}"
       max_tokens: 4096
+      context_from: [memory_context]
       timeout_seconds: 300
 
   # Parallel review layer 2: Edge case hunting
   - id: edge_case_review
     type: agent
-    depends_on: []
+    depends_on: [memory_context]
     executor: bmad-method
     config:
       model_tier: balanced
@@ -32,6 +46,7 @@ steps:
         Check: null/empty inputs, integer overflow, concurrency, resource exhaustion.
       user_prompt_template: "Hunt for unhandled edge cases in: {{input}}"
       max_tokens: 4096
+      context_from: [memory_context]
       timeout_seconds: 300
 
   # Synthesize findings from both parallel reviews

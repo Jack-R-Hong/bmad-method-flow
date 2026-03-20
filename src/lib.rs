@@ -39,6 +39,11 @@ impl PluginLifecycle for CodingPackPlugin {
                     version_req: ">=0.1.0".to_string(),
                     optional: true,
                 },
+                PluginDependency {
+                    name: "plugin-memory".to_string(),
+                    version_req: ">=0.1.0".to_string(),
+                    optional: true,
+                },
             ])
     }
 

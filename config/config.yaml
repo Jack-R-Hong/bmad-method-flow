@@ -1,3 +1,16 @@
 db_path: "pulse.db"
 log_level: "info"
 plugin_dir: "config/plugins"
+
+# ── Memory / Knowledge Graph ────────────────────────────────
+# provider: gitnexus | greptile | none
+# Set to "none" to disable all memory steps in workflows.
+memory:
+  provider: gitnexus
+  auto_reindex: true          # re-index after each commit
+  gitnexus:
+    package: "gitnexus@latest" # npm package spec for npx
+    analyze_flags: []          # extra flags for `gitnexus analyze`
+  greptile:
+    api_key_env: "GREPTILE_API_KEY"  # env var holding the API key
+    remote: ""                 # e.g. "github:owner/repo"

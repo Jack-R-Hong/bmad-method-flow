@@ -5,11 +5,23 @@ requires:
   - plugin: provider-claude-code
   - plugin: bmad-method
   - plugin: plugin-git-ops
+  - plugin: plugin-memory
+    optional: true
 steps:
+  # Step 0 (optional): Quick knowledge graph lookup
+  - id: memory_context
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "query", "{{input}}"]
+      timeout_seconds: 60
+
   # Step 1: Quick Flow Solo Dev creates lean spec
   - id: quick_spec
     type: agent
-    depends_on: []
+    depends_on: [memory_context]
     executor: bmad-method
     config:
       model_tier: fast
@@ -22,6 +34,7 @@ steps:
         Keep it lean. No bureaucracy.
       user_prompt_template: "Quick spec for: {{input}}"
       max_tokens: 2048
+      context_from: [memory_context]
       timeout_seconds: 180
 
   # Step 2: Implement immediately
@@ -46,3 +59,13 @@ steps:
     executor: git-ops
     config:
       command: ["bash", "-c", "git add -A && git commit -m \"feat: {{input}}\""]
+
+  # Step 4: Re-index after commit
+  - id: memory_reindex
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "reindex", "."]
+      timeout_seconds: 120

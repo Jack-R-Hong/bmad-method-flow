@@ -5,11 +5,23 @@ requires:
   - plugin: provider-claude-code
   - plugin: bmad-method
   - plugin: plugin-git-ops
+  - plugin: plugin-memory
+    optional: true
 steps:
-  # Step 1: Architect analyzes the bug
+  # Step 0 (optional): Query knowledge graph for bug context
+  - id: memory_context
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "query", "{{input}}"]
+      timeout_seconds: 60
+
+  # Step 1: Architect analyzes the bug (with graph context)
   - id: analyze_bug
     type: agent
-    depends_on: []
+    depends_on: [memory_context]
     executor: bmad-method
     config:
       model_tier: balanced
@@ -18,8 +30,10 @@ steps:
         1. Root cause (not just symptoms)
         2. Affected components and blast radius
         3. Recommended fix strategy with minimal risk
+        Use knowledge graph context (if available) to understand call chains and impact scope.
       user_prompt_template: "Analyze bug: {{input}}"
       max_tokens: 4096
+      context_from: [memory_context]
       timeout_seconds: 300
 
   # Step 2: Implement the fix
@@ -52,10 +66,30 @@ steps:
       context_from: [implement_fix]
       timeout_seconds: 300
 
-  # Step 4: Commit the fix
-  - id: git_commit
+  # Step 4: Detect changes & risk assessment
+  - id: memory_detect_changes
     type: function
     depends_on: [edge_case_review]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "detect-changes"]
+      timeout_seconds: 60
+
+  # Step 5: Commit the fix
+  - id: git_commit
+    type: function
+    depends_on: [memory_detect_changes]
     executor: git-ops
     config:
       command: ["bash", "-c", "git add -A && git commit -m \"fix: {{input}}\""]
+
+  # Step 6: Re-index after commit
+  - id: memory_reindex
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "reindex", "."]
+      timeout_seconds: 120
