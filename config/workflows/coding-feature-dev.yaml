@@ -17,9 +17,12 @@ steps:
       system_prompt: |
         You are bmad/architect. Review the feature request and create a technical design
         including component breakdown, API contracts, and data flow.
+        Also generate a short kebab-case branch name (e.g. "add-login-validation")
+        and include it in your output as: branch_name: <name>
       user_prompt_template: "Design the architecture for: {{input}}"
       max_tokens: 4096
       context_from: []
+      timeout_seconds: 300
 
   # Step 2: Create isolated worktree for development
   - id: create_worktree
@@ -42,6 +45,7 @@ steps:
       user_prompt_template: "Implement feature based on architecture design: {{input}}"
       max_tokens: 8192
       context_from: [architect_design]
+      timeout_seconds: 600
 
   # Step 4: QA code review
   - id: qa_review
@@ -56,6 +60,7 @@ steps:
       user_prompt_template: "Review this implementation for quality and completeness"
       max_tokens: 4096
       context_from: [dev_implement]
+      timeout_seconds: 300
 
   # Step 5: Git commit
   - id: git_commit
@@ -63,4 +68,4 @@ steps:
     depends_on: [qa_review]
     executor: git-ops
     config:
-      command: ["git", "add", "-A"]
+      command: ["bash", "-c", "git add -A && git commit -m \"feat: {{input}}\""]

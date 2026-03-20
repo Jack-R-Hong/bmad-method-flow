@@ -5,11 +5,12 @@ requires:
   - plugin: provider-claude-code
 steps:
   # Step 1: Build all plugins
+  # Uses PULSE_PLUGINS_DIR env var (defaults to parent directory)
   - id: build_all
     type: function
     depends_on: []
     config:
-      command: ["bash", "-c", "cd ../provider-claude-code && cargo build --release && cd ../git-ops && cargo build --release && cd ../git-worktree && cargo build --release && cd ../bmad-method && cargo build --release"]
+      command: ["bash", "-c", "BASE_DIR=\"${PULSE_PLUGINS_DIR:-$(cd .. && pwd)}\" && for d in provider-claude-code git-ops git-worktree bmad-method; do echo \"Building $d...\" && cd \"$BASE_DIR/$d\" && cargo build --release || exit 1; done"]
       timeout_seconds: 600
 
   # Step 2: Copy binaries to config/plugins
@@ -17,7 +18,7 @@ steps:
     type: function
     depends_on: [build_all]
     config:
-      command: ["bash", "-c", "cp ../provider-claude-code/target/release/provider-claude-code config/plugins/ && cp ../git-ops/target/release/libplugin_git_ops.so config/plugins/plugin-git-ops && cp ../git-worktree/target/release/plugin-git-worktree config/plugins/ && cp ../bmad-method/target/release/bmad-method config/plugins/"]
+      command: ["bash", "-c", "BASE_DIR=\"${PULSE_PLUGINS_DIR:-$(cd .. && pwd)}\" && DEST=\"$(pwd)/config/plugins\" && cp \"$BASE_DIR/provider-claude-code/target/release/provider-claude-code\" \"$DEST/\" && cp \"$BASE_DIR/git-ops/target/release/plugin-git-ops\" \"$DEST/\" && cp \"$BASE_DIR/git-worktree/target/release/plugin-git-worktree\" \"$DEST/\" && cp \"$BASE_DIR/bmad-method/target/release/bmad-method\" \"$DEST/\""]
 
   # Step 3: Validate
   - id: validate

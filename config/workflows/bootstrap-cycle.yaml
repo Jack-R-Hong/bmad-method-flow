@@ -26,6 +26,7 @@ steps:
         Consider: backward compatibility, build order, circular dependency risks.
       user_prompt_template: "Plan self-dev change: {{input}}"
       max_tokens: 4096
+      timeout_seconds: 300
 
   # Phase 2: Implement
   - id: implement
@@ -42,6 +43,7 @@ steps:
       user_prompt_template: "Implement: {{input}}"
       max_tokens: 8192
       context_from: [plan]
+      timeout_seconds: 600
 
   # Phase 3: Test the changed plugin
   - id: test
@@ -67,13 +69,15 @@ steps:
       user_prompt_template: "Review self-dev change for safety"
       max_tokens: 4096
       context_from: [implement]
+      timeout_seconds: 300
 
   # Phase 5: Rebuild all plugins with the change
+  # Uses PULSE_PLUGINS_DIR env var (defaults to parent directory)
   - id: rebuild
     type: function
     depends_on: [review]
     config:
-      command: ["bash", "-c", "for d in provider-claude-code git-ops git-worktree bmad-method; do echo \"Building $d...\" && cd /home/jack/Document/pulse-plugins/$d && cargo build --release || exit 1; done"]
+      command: ["bash", "-c", "BASE_DIR=\"${PULSE_PLUGINS_DIR:-$(cd .. && pwd)}\" && for d in provider-claude-code git-ops git-worktree bmad-method; do echo \"Building $d...\" && cd \"$BASE_DIR/$d\" && cargo build --release || exit 1; done"]
       timeout_seconds: 600
 
   # Phase 6: Hot-swap — install rebuilt plugins
@@ -81,7 +85,7 @@ steps:
     type: function
     depends_on: [rebuild]
     config:
-      command: ["bash", "-c", "DEST=/home/jack/Document/pulse-plugins/bmad-method-flow/config/plugins && SRC=/home/jack/Document/pulse-plugins && for f in $DEST/*; do rm -f \"$f\"; done && cp $SRC/provider-claude-code/target/release/provider-claude-code $DEST/ && cp $SRC/git-ops/target/release/plugin-git-ops $DEST/ && cp $SRC/git-worktree/target/release/plugin-git-worktree $DEST/ && cp $SRC/bmad-method/target/release/bmad-method $DEST/ && cp /home/jack/Document/pulse-plugins/bmad-method-flow/target/release/plugin-coding-pack $DEST/"]
+      command: ["bash", "-c", "BASE_DIR=\"${PULSE_PLUGINS_DIR:-$(cd .. && pwd)}\" && DEST=\"$(pwd)/config/plugins\" && for f in \"$DEST\"/*; do rm -f \"$f\"; done && cp \"$BASE_DIR/provider-claude-code/target/release/provider-claude-code\" \"$DEST/\" && cp \"$BASE_DIR/git-ops/target/release/plugin-git-ops\" \"$DEST/\" && cp \"$BASE_DIR/git-worktree/target/release/plugin-git-worktree\" \"$DEST/\" && cp \"$BASE_DIR/bmad-method/target/release/bmad-method\" \"$DEST/\" && cp \"$(pwd)/target/release/plugin-coding-pack\" \"$DEST/\""]
 
   # Phase 7: Validate the new installation
   - id: validate
@@ -95,4 +99,4 @@ steps:
     type: function
     depends_on: [validate]
     config:
-      command: ["git", "add", "-A"]
+      command: ["bash", "-c", "git add -A && git commit -m \"chore(bootstrap): {{input}}\""]

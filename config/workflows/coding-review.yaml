@@ -17,6 +17,7 @@ steps:
         and violations of SOLID principles. Be thorough and critical.
       user_prompt_template: "Perform critical adversarial review of: {{input}}"
       max_tokens: 4096
+      timeout_seconds: 300
 
   # Parallel review layer 2: Edge case hunting
   - id: edge_case_review
@@ -31,6 +32,7 @@ steps:
         Check: null/empty inputs, integer overflow, concurrency, resource exhaustion.
       user_prompt_template: "Hunt for unhandled edge cases in: {{input}}"
       max_tokens: 4096
+      timeout_seconds: 300
 
   # Synthesize findings from both parallel reviews
   - id: review_synthesis
@@ -45,3 +47,4 @@ steps:
       user_prompt_template: "Synthesize review findings into a prioritized action list"
       max_tokens: 4096
       context_from: [adversarial_review, edge_case_review]
+      timeout_seconds: 300

@@ -22,6 +22,7 @@ steps:
         Keep it lean. No bureaucracy.
       user_prompt_template: "Quick spec for: {{input}}"
       max_tokens: 2048
+      timeout_seconds: 180
 
   # Step 2: Implement immediately
   - id: implement
@@ -36,6 +37,7 @@ steps:
       user_prompt_template: "Implement: {{input}}"
       max_tokens: 4096
       context_from: [quick_spec]
+      timeout_seconds: 600
 
   # Step 3: Commit
   - id: git_commit
@@ -43,4 +45,4 @@ steps:
     depends_on: [implement]
     executor: git-ops
     config:
-      command: ["git", "add", "-A"]
+      command: ["bash", "-c", "git add -A && git commit -m \"feat: {{input}}\""]

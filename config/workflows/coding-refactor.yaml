@@ -20,6 +20,7 @@ steps:
         3. List risks and rollback strategies
       user_prompt_template: "Plan safe refactoring for: {{input}}"
       max_tokens: 4096
+      timeout_seconds: 300
 
   # Step 2: Execute refactoring
   - id: execute_refactor
@@ -35,6 +36,7 @@ steps:
       user_prompt_template: "Execute refactoring plan: {{input}}"
       max_tokens: 8192
       context_from: [plan_refactor]
+      timeout_seconds: 600
 
   # Step 3: QA validates no regressions
   - id: regression_check
@@ -49,6 +51,7 @@ steps:
       user_prompt_template: "Verify no regressions in refactoring"
       max_tokens: 4096
       context_from: [execute_refactor]
+      timeout_seconds: 300
 
   # Step 4: Commit
   - id: git_commit
@@ -56,4 +59,4 @@ steps:
     depends_on: [regression_check]
     executor: git-ops
     config:
-      command: ["git", "add", "-A"]
+      command: ["bash", "-c", "git add -A && git commit -m \"refactor: {{input}}\""]

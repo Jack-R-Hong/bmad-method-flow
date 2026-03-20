@@ -20,8 +20,11 @@ steps:
         - Acceptance criteria (Given/When/Then)
         - Technical notes and constraints
         - Definition of Done checklist
+        Also generate a short kebab-case branch name (e.g. "user-profile-edit")
+        and include it in your output as: branch_name: <name>
       user_prompt_template: "Prepare story spec from: {{input}}"
       max_tokens: 4096
+      timeout_seconds: 300
 
   # Step 2: Architect creates technical design
   - id: technical_design
@@ -39,6 +42,7 @@ steps:
       user_prompt_template: "Create technical design for this story"
       max_tokens: 4096
       context_from: [prepare_story]
+      timeout_seconds: 300
 
   # Step 3: Create worktree
   - id: create_worktree
@@ -61,6 +65,7 @@ steps:
       user_prompt_template: "Implement story with TDD: {{input}}"
       max_tokens: 8192
       context_from: [prepare_story, technical_design]
+      timeout_seconds: 600
 
   # Step 5: QA review against acceptance criteria
   - id: qa_review
@@ -75,6 +80,7 @@ steps:
       user_prompt_template: "Review implementation against acceptance criteria"
       max_tokens: 4096
       context_from: [prepare_story, implement]
+      timeout_seconds: 300
 
   # Step 6: Commit
   - id: git_commit
@@ -82,4 +88,4 @@ steps:
     depends_on: [qa_review]
     executor: git-ops
     config:
-      command: ["git", "add", "-A"]
+      command: ["bash", "-c", "git add -A && git commit -m \"feat: {{input}}\""]

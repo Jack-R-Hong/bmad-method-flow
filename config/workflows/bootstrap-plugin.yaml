@@ -23,6 +23,7 @@ steps:
         - Build verification steps (cargo test, cargo clippy)
       user_prompt_template: "Plan plugin change: {{input}}"
       max_tokens: 4096
+      timeout_seconds: 300
 
   # Step 2: Implement the change via Claude Code
   - id: implement
@@ -41,6 +42,7 @@ steps:
       user_prompt_template: "Implement plugin change: {{input}}"
       max_tokens: 8192
       context_from: [architect_plan]
+      timeout_seconds: 600
 
   # Step 3: Build verification
   - id: build_verify
@@ -67,10 +69,11 @@ steps:
       user_prompt_template: "Review plugin change for quality and WASM compatibility"
       max_tokens: 4096
       context_from: [implement]
+      timeout_seconds: 300
 
   # Step 5: Git stage changes
   - id: git_commit
     type: function
     depends_on: [qa_review]
     config:
-      command: ["git", "add", "-A"]
+      command: ["bash", "-c", "git add -A && git commit -m \"chore: {{input}}\""]

@@ -20,6 +20,7 @@ steps:
         3. Recommended fix strategy with minimal risk
       user_prompt_template: "Analyze bug: {{input}}"
       max_tokens: 4096
+      timeout_seconds: 300
 
   # Step 2: Implement the fix
   - id: implement_fix
@@ -34,6 +35,7 @@ steps:
       user_prompt_template: "Fix the bug based on root cause analysis: {{input}}"
       max_tokens: 4096
       context_from: [analyze_bug]
+      timeout_seconds: 600
 
   # Step 3: QA edge case review
   - id: edge_case_review
@@ -48,6 +50,7 @@ steps:
       user_prompt_template: "Review this bug fix for completeness and edge cases"
       max_tokens: 4096
       context_from: [implement_fix]
+      timeout_seconds: 300
 
   # Step 4: Commit the fix
   - id: git_commit
@@ -55,4 +58,4 @@ steps:
     depends_on: [edge_case_review]
     executor: git-ops
     config:
-      command: ["git", "add", "-A"]
+      command: ["bash", "-c", "git add -A && git commit -m \"fix: {{input}}\""]

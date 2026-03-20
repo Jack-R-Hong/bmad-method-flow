@@ -9,8 +9,8 @@ author = "Jack"
 
 [plugins]
 provider-claude-code = { version = ">=0.1.0", source = "local:../pulse-plugins/provider-claude-code" }
-git-ops              = { version = ">=0.1.0", source = "local:../pulse-plugins/git-ops" }
-git-worktree         = { version = ">=0.1.0", source = "local:../pulse-plugins/git-worktree" }
+plugin-git-ops       = { version = ">=0.1.0", source = "local:../pulse-plugins/git-ops" }
+plugin-git-worktree  = { version = ">=0.1.0", source = "local:../pulse-plugins/git-worktree" }
 bmad-method          = { version = ">=0.1.0", source = "local:../pulse-plugins/bmad-method" }
 
 [workflows]

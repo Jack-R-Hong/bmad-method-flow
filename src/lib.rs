@@ -1,4 +1,5 @@
 pub mod pack;
+pub mod util;
 pub mod validator;
 
 use pulse_plugin_sdk::error::WitPluginError;
@@ -7,6 +8,7 @@ use pulse_plugin_sdk::wit_types::{PluginDependency, PluginInfo, StepConfig, Step
 use tracing::info;
 
 use pack::CodingPackInput;
+use util::is_executable;
 
 /// Meta-plugin that orchestrates the coding plugin pack.
 ///
@@ -47,7 +49,31 @@ impl PluginLifecycle for CodingPackPlugin {
         let workflows_ok = workflows_dir.exists();
         let plugins_ok = plugins_dir.exists();
 
-        if workflows_ok && plugins_ok {
+        // Verify required plugin binaries exist and are executable
+        let required_plugins = ["bmad-method", "provider-claude-code"];
+        let mut plugins_healthy = true;
+        for plugin_name in &required_plugins {
+            let plugin_path = plugins_dir.join(plugin_name);
+            if !plugin_path.exists() {
+                tracing::warn!(
+                    plugin = "plugin-coding-pack",
+                    missing = plugin_name,
+                    "Required plugin binary not found"
+                );
+                plugins_healthy = false;
+            } else if !is_executable(&plugin_path) {
+                tracing::warn!(
+                    plugin = "plugin-coding-pack",
+                    not_executable = plugin_name,
+                    "Plugin binary is not executable"
+                );
+                plugins_healthy = false;
+            }
+        }
+
+        let healthy = workflows_ok && plugins_ok && plugins_healthy;
+
+        if healthy {
             info!(
                 plugin = "plugin-coding-pack",
                 status = "healthy",
@@ -58,12 +84,12 @@ impl PluginLifecycle for CodingPackPlugin {
                 plugin = "plugin-coding-pack",
                 workflows_dir_exists = workflows_ok,
                 plugins_dir_exists = plugins_ok,
-                "Coding pack health check: missing directories"
+                plugins_healthy = plugins_healthy,
+                "Coding pack health check: issues detected"
             );
         }
 
-        // Always report healthy — missing dirs are warnings, not fatal
-        true
+        healthy
     }
 }
 
@@ -81,7 +107,7 @@ impl StepExecutorPlugin for CodingPackPlugin {
 
         let input_val = task.input.as_ref().ok_or_else(|| {
             WitPluginError::invalid_input(
-                "task input required; send JSON {\"action\": \"validate-pack\"} or {\"action\": \"list-workflows\"}",
+                "task input required; send JSON {\"action\": \"validate-pack\"}, {\"action\": \"validate-workflows\"}, or {\"action\": \"list-workflows\"}",
             )
         })?;
 
