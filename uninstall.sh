@@ -50,6 +50,22 @@ declare -A DASHBOARD_FILES=(
   ["routes/coding-pack/+page.svelte"]="routes/coding-pack/+page.svelte"
 )
 
+# Dashboard directories to remove entirely (plugin-specific routes)
+DASHBOARD_DIRS_TO_REMOVE=(
+  "routes/plugins/plugin-coding-pack"
+)
+
+# Dashboard files that import from codingPack store and need patching
+# Format: "file_path|old_import_line|replacement"
+DASHBOARD_PATCH_IMPORTS=(
+  "lib/components/insights/LLMChatView.svelte|import { WORKFLOWS, AGENTS } from '\$lib/stores/codingPack.svelte';|const WORKFLOWS: any[] = []; const AGENTS: any[] = [];"
+  "lib/components/TaskDetail.svelte|import { WORKFLOWS } from '\$lib/stores/codingPack.svelte';|const WORKFLOWS: any[] = [];"
+)
+
+# Sidebar entry to remove
+SIDEBAR_FILE="lib/components/navigation/Sidebar.svelte"
+SIDEBAR_CODING_PACK_LINE="plugin-coding-pack"
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 RED='\033[0;31m'
@@ -233,6 +249,43 @@ if [[ "$DO_DASHBOARD" == true ]]; then
     if [[ -d "$assets_parent" ]] && [[ -z "$(ls -A "$assets_parent" 2>/dev/null)" ]]; then
       rmdir "$assets_parent"
       ok "$assets_parent/ (empty, removed)"
+    fi
+
+    # ── Step 3b: Remove plugin-specific route directories ─────────────────
+    header "Removing plugin route directories"
+    for dir_rel in "${DASHBOARD_DIRS_TO_REMOVE[@]}"; do
+      target="$DST_BASE/$dir_rel"
+      if [[ -d "$target" ]]; then
+        rm -rf "$target"
+        ok "$target/"
+      else
+        skip "$dir_rel/ (not found)"
+      fi
+    done
+
+    # ── Step 3c: Patch dashboard files that import from codingPack store ──
+    header "Patching dashboard imports"
+    for entry in "${DASHBOARD_PATCH_IMPORTS[@]}"; do
+      IFS='|' read -r file_rel old_pattern replacement <<< "$entry"
+      target="$DST_BASE/$file_rel"
+      if [[ -f "$target" ]] && grep -qF "$old_pattern" "$target"; then
+        sed -i "s|$(printf '%s' "$old_pattern" | sed 's/[&/\]/\\&/g')|$(printf '%s' "$replacement" | sed 's/[&/\]/\\&/g')|g" "$target"
+        ok "patched $file_rel"
+      else
+        skip "$file_rel (not found or already patched)"
+      fi
+    done
+
+    # ── Step 3d: Remove Coding Pack sidebar entry ─────────────────────────
+    header "Cleaning sidebar"
+    sidebar_target="$DST_BASE/$SIDEBAR_FILE"
+    if [[ -f "$sidebar_target" ]] && grep -q "$SIDEBAR_CODING_PACK_LINE" "$sidebar_target"; then
+      sed -i "/$SIDEBAR_CODING_PACK_LINE/d" "$sidebar_target"
+      # Also remove the now-unused Package import if present
+      sed -i '/^[[:space:]]*Package,$/d' "$sidebar_target"
+      ok "removed Coding Pack from sidebar"
+    else
+      skip "sidebar (not found or already clean)"
     fi
   fi
 fi
