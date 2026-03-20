@@ -41,6 +41,6 @@ steps:
   - id: git_commit
     type: function
     depends_on: [implement]
-    executor: plugin-git-ops
+    executor: git-ops
     config:
       command: ["git", "add", "-A"]

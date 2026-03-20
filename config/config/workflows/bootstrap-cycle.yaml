@@ -81,7 +81,7 @@ steps:
     type: function
     depends_on: [rebuild]
     config:
-      command: ["bash", "-c", "DEST=/home/jack/Document/pulse-plugins/bmad-method-flow/config/plugins && cp /home/jack/Document/pulse-plugins/provider-claude-code/target/release/provider-claude-code $DEST/ && cp /home/jack/Document/pulse-plugins/git-ops/target/release/libplugin_git_ops.so $DEST/plugin-git-ops && cp /home/jack/Document/pulse-plugins/git-worktree/target/release/plugin-git-worktree $DEST/ && cp /home/jack/Document/pulse-plugins/bmad-method/target/release/bmad-method $DEST/"]
+      command: ["bash", "-c", "DEST=/home/jack/Document/pulse-plugins/bmad-method-flow/config/plugins && SRC=/home/jack/Document/pulse-plugins && for f in $DEST/*; do rm -f \"$f\"; done && cp $SRC/provider-claude-code/target/release/provider-claude-code $DEST/ && cp $SRC/git-ops/target/release/plugin-git-ops $DEST/ && cp $SRC/git-worktree/target/release/plugin-git-worktree $DEST/ && cp $SRC/bmad-method/target/release/bmad-method $DEST/ && cp /home/jack/Document/pulse-plugins/bmad-method-flow/target/release/plugin-coding-pack $DEST/"]
 
   # Phase 7: Validate the new installation
   - id: validate
@@ -94,6 +94,5 @@ steps:
   - id: commit
     type: function
     depends_on: [validate]
-    executor: plugin-git-ops
     config:
       command: ["git", "add", "-A"]

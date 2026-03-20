@@ -53,6 +53,6 @@ steps:
   - id: git_commit
     type: function
     depends_on: [edge_case_review]
-    executor: plugin-git-ops
+    executor: git-ops
     config:
       command: ["git", "add", "-A"]

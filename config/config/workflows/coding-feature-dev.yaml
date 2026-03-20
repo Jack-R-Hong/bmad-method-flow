@@ -61,6 +61,6 @@ steps:
   - id: git_commit
     type: function
     depends_on: [qa_review]
-    executor: plugin-git-ops
+    executor: git-ops
     config:
       command: ["git", "add", "-A"]

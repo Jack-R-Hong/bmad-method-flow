@@ -1,0 +1,3 @@
+db_path: "pulse.db"
+log_level: "info"
+plugin_dir: "config/plugins"

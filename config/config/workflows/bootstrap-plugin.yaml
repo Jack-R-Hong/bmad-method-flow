@@ -68,10 +68,9 @@ steps:
       max_tokens: 4096
       context_from: [implement]
 
-  # Step 5: Commit
+  # Step 5: Git stage changes
   - id: git_commit
     type: function
     depends_on: [qa_review]
-    executor: plugin-git-ops
     config:
       command: ["git", "add", "-A"]

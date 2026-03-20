@@ -1,6 +1,7 @@
 # Build artifacts
 target/
 *.wasm
+Cargo.lock
 
 # Plugin binaries (rebuilt from source)
 config/plugins/
