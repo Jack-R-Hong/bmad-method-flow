@@ -69,6 +69,8 @@ steps:
       system_prompt: |
         You are bmad/qa. Review the implementation for quality, edge cases, security,
         and test coverage. Report findings with severity levels.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Review this implementation for quality and completeness"
       max_tokens: 4096
       context_from: [dev_implement]

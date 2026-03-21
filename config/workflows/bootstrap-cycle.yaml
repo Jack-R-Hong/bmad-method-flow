@@ -66,6 +66,8 @@ steps:
         - Will this change break the currently running workflow?
         - Is there a safe upgrade path? (build new → swap → verify)
         - Are there any circular dependency issues?
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Review self-dev change for safety"
       max_tokens: 4096
       context_from: [implement]

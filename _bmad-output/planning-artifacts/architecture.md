@@ -3,6 +3,11 @@ stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
 lastStep: 8
 status: 'complete'
 completedAt: '2026-03-18'
+lastUpdated: '2026-03-21'
+addenda:
+  - 'Epic 6: Knowledge Graph Memory Plugin (2026-03-20)'
+  - 'In-Plugin Workflow Executor (2026-03-21)'
+  - 'Quality Gate Architecture (2026-03-21)'
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '../../pulse/architecture.md'
@@ -959,3 +964,228 @@ To add a new knowledge graph provider (e.g., `sourcegraph`):
    ```
 
 No workflow changes needed — the provider abstraction handles routing.
+
+---
+
+## Addendum: In-Plugin Workflow Executor Architecture
+
+*Added: 2026-03-21*
+
+### Overview
+
+The plugin-coding-pack now includes a **built-in workflow executor** (`src/executor.rs`) that can execute workflow DAGs without depending on the Pulse engine's dispatch system. This enables standalone autonomous development via a single `execute-workflow` action.
+
+### Architectural Decisions
+
+#### Executor Inside the Meta-Plugin (Not in Pulse Engine)
+
+- **Decision:** Implement the workflow executor as a new action in plugin-coding-pack rather than waiting for or depending on Pulse engine's workflow dispatch
+- **Rationale:** The Pulse engine's `local:` source support for `install-pack` is incomplete, and workflow dispatch may not handle the coding pack's specific needs (two-stage agent execution, session forwarding). An in-plugin executor gives full control over execution semantics while remaining compatible with future Pulse engine dispatch.
+- **Affects:** `src/executor.rs` (new module), `src/pack.rs` (new action), all workflow YAML files
+
+#### Two-Stage Agent Execution for bmad-method Steps
+
+- **Decision:** Agent steps with `executor: bmad-method` execute in two stages:
+  1. Call bmad-method via JSON-RPC → receive agent persona (system prompt, suggested config, capabilities)
+  2. Call provider-claude-code via JSON-RPC → execute LLM reasoning with merged persona + task instructions
+- **Rationale:** bmad-method is a **persona provider**, not an LLM executor. It returns agent definitions (e.g., "Winston the Architect" with role-specific system prompt). The actual reasoning must be performed by provider-claude-code which spawns the Claude CLI.
+- **Prompt merging strategy:** Persona system prompt comes first (agent character/role), followed by `## Task-Specific Instructions` section from the workflow YAML's `system_prompt` field. This gives the agent its identity while focusing it on the specific task.
+- **Model selection:** Workflow `model_tier` overrides persona `suggested_config.model_tier`. If neither specified, defaults to `"balanced"`.
+- **Affects:** All workflow steps with `executor: bmad-method` (17 steps across 8 workflows)
+
+#### Direct Execution for provider-claude-code Steps
+
+- **Decision:** Agent steps with `executor: provider-claude-code` call the plugin directly (single stage)
+- **Rationale:** provider-claude-code is already an LLM executor. No persona lookup needed — the workflow YAML `system_prompt` is passed directly as the system prompt.
+- **Affects:** Implementation steps in all coding workflows
+
+#### Session Continuity via Template Variables
+
+- **Decision:** Extract `session_id` from provider-claude-code responses and forward to subsequent LLM calls via `template_vars`
+- **Rationale:** provider-claude-code returns `{"result": "...", "session_id": "uuid", "total_cost_usd": N}`. Forwarding `session_id` to subsequent steps enables multi-turn reasoning chains where later steps can reference earlier context without re-sending it.
+- **Mechanism:** After each provider-claude-code call, the executor parses the inner JSON, extracts `session_id`, stores it in `template_vars["session_id"]`, and includes it in `config.parameters.session_id` for the next LLM call.
+- **Affects:** All sequential agent steps within a workflow
+
+#### Sequential DAG Execution (v1)
+
+- **Decision:** Execute steps sequentially in topological order. No parallel execution in v1.
+- **Rationale:** Simplicity. Parallel execution (e.g., `adversarial_review` + `edge_case_review` in coding-review.yaml) would require thread pooling and concurrent process management. Sequential execution is correct for all workflows — parallel steps simply run one after another. Parallel execution can be added in v2 if performance becomes a concern.
+- **Algorithm:** Kahn's algorithm (BFS topological sort) with deterministic alphabetical ordering for steps at the same dependency level.
+- **Affects:** All workflows, especially coding-review.yaml (parallel reviews run sequentially)
+
+#### Function Steps as Direct Subprocesses
+
+- **Decision:** Function steps execute their `command` array directly as a subprocess, NOT via JSON-RPC
+- **Rationale:** Function steps like `git add -A && git commit` are shell commands, not plugin RPC calls. The executor resolves the program path (checking `config/plugins/` first, then `$PATH`), substitutes template variables in all command parts, and spawns the process directly.
+- **Affects:** All git-commit, git-worktree, and plugin-memory function steps
+
+### Execution Data Flow
+
+```
+User Input: {"action": "execute-workflow", "workflow_id": "coding-quick-dev", "input": "Add login"}
+    │
+    ▼
+┌─────────────────────────────────┐
+│ executor::execute_workflow()     │
+│ 1. Load config/workflows/*.yaml │
+│ 2. Check required plugins       │
+│ 3. Topological sort (Kahn's)    │
+│ 4. Execute steps sequentially   │
+└────────────┬────────────────────┘
+             │
+    ┌────────┴────────────────────────────────┐
+    │ For each step in DAG order:             │
+    │                                         │
+    │  type: agent, executor: bmad-method     │
+    │  ┌─────────────────────────────────┐    │
+    │  │ Stage 1: bmad-method (JSON-RPC) │    │
+    │  │ → persona JSON (system_prompt)  │    │
+    │  └──────────────┬──────────────────┘    │
+    │                 ▼                       │
+    │  ┌─────────────────────────────────┐    │
+    │  │ Stage 2: provider-claude-code   │    │
+    │  │ (JSON-RPC, merged prompt)       │    │
+    │  │ → LLM result + session_id      │    │
+    │  └──────────────┬──────────────────┘    │
+    │                 │                       │
+    │  type: agent, executor: provider-cc     │
+    │  ┌─────────────────────────────────┐    │
+    │  │ Direct: provider-claude-code    │    │
+    │  │ (JSON-RPC, workflow prompt)     │    │
+    │  │ → LLM result + session_id      │    │
+    │  └──────────────┬──────────────────┘    │
+    │                 │                       │
+    │  type: function                         │
+    │  ┌─────────────────────────────────┐    │
+    │  │ Direct subprocess               │    │
+    │  │ (command array, template vars)  │    │
+    │  │ → stdout/stderr + exit code     │    │
+    │  └──────────────┬──────────────────┘    │
+    │                 │                       │
+    │  Store output → HashMap<step_id, out>   │
+    │  Extract branch_name, session_id        │
+    │  Assemble context_from for next step    │
+    └────────────┬────────────────────────────┘
+                 │
+                 ▼
+    Result JSON: {workflow_id, status, steps[], total_execution_time_ms}
+```
+
+### Timeout & Process Management
+
+- **Per-step timeout:** Configurable via `config.timeout_seconds`, default 300s
+- **Enforcement:** Watchdog thread with `mpsc::recv_timeout`. On expiry, sends `kill -9` to child process via `Command::new("kill")` (safe, no `unsafe` code)
+- **AtomicBool flag:** Signals timeout back to main thread after child is killed
+- **No async runtime:** Uses `std::process::Command` + `std::thread` (project uses tokio only in dev-dependencies)
+
+### File Structure
+
+```
+src/
+├── lib.rs          # pub mod executor; (1 line added)
+├── executor.rs     # Workflow executor — 650 lines, 24 unit tests
+│   ├── WorkflowDef, StepDef, StepConfigDef    (YAML deserialization)
+│   ├── StepOutput, StepStatus                  (execution results)
+│   ├── execute_workflow()                      (entry point)
+│   ├── execute_bmad_agent_step()               (two-stage)
+│   ├── execute_direct_agent_step()             (single-stage)
+│   ├── execute_function_step()                 (subprocess)
+│   ├── spawn_plugin_rpc()                      (JSON-RPC over stdio)
+│   ├── topological_sort()                      (Kahn's algorithm)
+│   ├── assemble_context()                      (context_from)
+│   ├── substitute_templates()                  ({{input}}, {{branch_name}})
+│   └── extract_branch_name()                   (agent output parsing)
+├── pack.rs         # execute_action() + "execute-workflow" match arm
+├── validator.rs    # (unchanged — validation only)
+└── main.rs         # (unchanged — JSON-RPC stdio adapter)
+```
+
+---
+
+## Addendum: Quality Gate Architecture
+
+*Added: 2026-03-21*
+
+### Overview
+
+Quality gates enable review/QA steps to **block downstream commit steps** based on their verdict. Without gates, `git_commit` executes unconditionally after `qa_review`, regardless of whether the review found critical issues.
+
+### Architectural Decisions
+
+#### Verdict Extraction from Review Output
+
+- **Decision:** Parse review step output for a structured verdict line using the pattern `verdict: approve|request-changes|reject`
+- **Rationale:** Review steps are LLM-generated text. Rather than requiring a specific JSON schema (which LLMs may not follow consistently), we scan for a simple `verdict:` line — the same pattern used for `branch_name:` extraction. Workflow YAML system prompts instruct the reviewing agent to include this line.
+- **Verdict values:**
+  - `approve` — step passes, downstream steps proceed
+  - `request-changes` — step fails with actionable feedback, blocks commit
+  - `reject` — step fails with critical issues, blocks commit
+- **Fallback:** If no `verdict:` line is found, the step is treated as `approve` (backwards-compatible — existing workflows without verdict instructions still work)
+- **Affects:** `src/executor.rs` (new `extract_verdict()` function), review step system prompts in workflow YAMLs
+
+#### Gate Evaluation in the Executor
+
+- **Decision:** Implement gates as a **step dependency check enhancement** rather than a separate gate step type
+- **Rationale:** The existing `depends_on` mechanism already blocks downstream steps when upstream steps fail. By marking a review step as "failed" when its verdict is `request-changes` or `reject`, the commit step is automatically blocked via the existing dependency satisfaction logic. No new step type or YAML schema needed.
+- **Mechanism:**
+  1. After an agent step completes successfully (LLM returned output), check if the step's `system_prompt` contains the keyword `review` or `qa`
+  2. If so, scan the output for `verdict:` line
+  3. If verdict is `request-changes` or `reject`, mark the step as `StepStatus::Failed` with the verdict and review findings in the error field
+  4. Downstream steps depending on this review step will be blocked by `dependencies_satisfied()`
+- **Affects:** `src/executor.rs` (verdict extraction + gate evaluation in `execute_workflow` main loop)
+
+#### Review Step System Prompt Convention
+
+- **Decision:** All review/QA workflow steps must include a verdict instruction in their `system_prompt`
+- **Convention:**
+  ```
+  End your review with a verdict line in exactly this format:
+  verdict: approve
+  OR
+  verdict: request-changes
+  OR
+  verdict: reject
+  ```
+- **Affects:** All workflow YAMLs containing review steps: `coding-feature-dev.yaml` (qa_review), `coding-story-dev.yaml` (qa_review), `coding-bug-fix.yaml` (edge_case_review), `coding-refactor.yaml` (regression_review), `coding-review.yaml` (adversarial_review, edge_case_review), `bootstrap-plugin.yaml` (qa_review), `bootstrap-cycle.yaml` (qa_review)
+
+### Gate Evaluation Flow
+
+```
+┌──────────────┐
+│  qa_review   │  Agent step (executor: bmad-method, two-stage)
+│  type: agent │  System prompt includes: "End with verdict: approve|request-changes|reject"
+└──────┬───────┘
+       │ LLM output includes: "verdict: request-changes"
+       ▼
+┌──────────────────────────┐
+│ extract_verdict(output)  │  → "request-changes"
+│ verdict != "approve"     │
+│ → mark step FAILED       │
+│ → error = review findings│
+└──────┬───────────────────┘
+       │ StepStatus::Failed
+       ▼
+┌──────────────────────────┐
+│ git_commit               │
+│ depends_on: [qa_review]  │
+│ dependencies_satisfied() │  → false (qa_review failed, not optional)
+│ → SKIPPED                │
+└──────────────────────────┘
+
+Result: workflow status = "failed", commit blocked
+```
+
+### Implementation Impact
+
+| File | Change |
+|------|--------|
+| `src/executor.rs` | Add `extract_verdict()` function (~15 lines) |
+| `src/executor.rs` | Add gate evaluation after agent step completion (~10 lines) |
+| `config/workflows/coding-feature-dev.yaml` | Add verdict instruction to qa_review system_prompt |
+| `config/workflows/coding-story-dev.yaml` | Add verdict instruction to qa_review system_prompt |
+| `config/workflows/coding-bug-fix.yaml` | Add verdict instruction to edge_case_review system_prompt |
+| `config/workflows/coding-refactor.yaml` | Add verdict instruction to regression_review system_prompt |
+| `config/workflows/coding-review.yaml` | Add verdict instruction to adversarial_review + edge_case_review |
+| `config/workflows/bootstrap-plugin.yaml` | Add verdict instruction to qa_review system_prompt |
+| `config/workflows/bootstrap-cycle.yaml` | Add verdict instruction to qa_review system_prompt |
+| Unit tests | `test_extract_verdict_*` (~5 tests) |

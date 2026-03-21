@@ -66,6 +66,8 @@ steps:
         - Plugin SDK trait compliance
         - Error handling completeness
         - Test coverage of new code paths
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Review plugin change for quality and WASM compatibility"
       max_tokens: 4096
       context_from: [implement]

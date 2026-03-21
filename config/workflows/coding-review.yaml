@@ -28,6 +28,8 @@ steps:
         Look for security vulnerabilities, performance bottlenecks, design flaws,
         and violations of SOLID principles. Be thorough and critical.
         Use knowledge graph context (if available) to understand call chains and dependencies.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Perform critical adversarial review of: {{input}}"
       max_tokens: 4096
       context_from: [memory_context]
@@ -44,6 +46,8 @@ steps:
         You are bmad/qa performing edge case analysis.
         Walk every branching path and boundary condition. Report only unhandled edge cases.
         Check: null/empty inputs, integer overflow, concurrency, resource exhaustion.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Hunt for unhandled edge cases in: {{input}}"
       max_tokens: 4096
       context_from: [memory_context]
@@ -59,6 +63,8 @@ steps:
       system_prompt: |
         You are bmad/sm. Synthesize code review findings into a single prioritized report.
         Categorize by severity (critical/high/medium/low) and provide actionable fix suggestions.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Synthesize review findings into a prioritized action list"
       max_tokens: 4096
       context_from: [adversarial_review, edge_case_review]

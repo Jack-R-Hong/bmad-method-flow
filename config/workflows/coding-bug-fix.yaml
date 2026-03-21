@@ -61,6 +61,8 @@ steps:
       system_prompt: |
         You are bmad/qa. Hunt for unhandled edge cases and verify the fix is complete.
         Check boundary conditions, error paths, and concurrent access scenarios.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Review this bug fix for completeness and edge cases"
       max_tokens: 4096
       context_from: [implement_fix]

@@ -157,7 +157,7 @@ pub fn execute_workflow(
         let result = execute_step(step, &outputs, &template_vars);
 
         match result {
-            Ok((output, session_id)) => {
+            Ok((mut output, session_id)) => {
                 // Extract branch_name from agent output if present
                 if let Some(content) = &output.content {
                     if let Some(branch) = extract_branch_name(content) {
@@ -167,6 +167,25 @@ pub fn execute_workflow(
                 // Forward session_id for continuity between LLM calls
                 if let Some(sid) = session_id {
                     template_vars.insert("session_id".to_string(), sid);
+                }
+
+                // Quality gate: check review/QA step verdicts
+                if output.status == StepStatus::Success && is_review_step(step) {
+                    if let Some(content) = &output.content {
+                        if let Some(verdict) = extract_verdict(content) {
+                            if verdict != "approve" {
+                                eprintln!(
+                                    "[workflow]   gate: verdict '{}' — blocking downstream",
+                                    verdict
+                                );
+                                output.status = StepStatus::Failed;
+                                output.error = Some(format!(
+                                    "review verdict: {} (commit blocked)",
+                                    verdict
+                                ));
+                            }
+                        }
+                    }
                 }
 
                 if output.status != StepStatus::Success && !step.optional {
@@ -367,6 +386,41 @@ fn substitute_templates(template: &str, vars: &HashMap<String, String>) -> Strin
         result = result.replace(&placeholder, value);
     }
     result
+}
+
+// ── Verdict extraction (quality gate) ──────────────────────────────────────
+
+/// Extract a review verdict from agent output.
+/// Looks for `verdict: approve|request-changes|reject`.
+/// Returns None if no verdict line found (treated as approve for backwards compat).
+fn extract_verdict(content: &str) -> Option<String> {
+    for line in content.lines().rev() {
+        let trimmed = line.trim().to_lowercase();
+        if let Some(rest) = trimmed.strip_prefix("verdict:") {
+            let verdict = rest.trim().trim_matches('"').trim_matches('\'');
+            match verdict {
+                "approve" | "request-changes" | "reject" => {
+                    return Some(verdict.to_string());
+                }
+                _ => continue,
+            }
+        }
+    }
+    None
+}
+
+/// Check if a step is a review/QA step based on its system_prompt keywords.
+fn is_review_step(step: &StepDef) -> bool {
+    if step.step_type != "agent" {
+        return false;
+    }
+    let prompt = step
+        .config
+        .as_ref()
+        .and_then(|c| c.system_prompt.as_deref())
+        .unwrap_or("");
+    let lower = prompt.to_lowercase();
+    lower.contains("review") || lower.contains("qa")
 }
 
 // ── Branch name extraction ─────────────────────────────────────────────────
@@ -1404,5 +1458,86 @@ mod tests {
             command: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/qa");
+    }
+
+    // ── extract_verdict (quality gate) ─────────────────────────────────
+
+    #[test]
+    fn extract_verdict_approve() {
+        let content = "Review looks good.\nverdict: approve\n";
+        assert_eq!(extract_verdict(content), Some("approve".to_string()));
+    }
+
+    #[test]
+    fn extract_verdict_request_changes() {
+        let content = "Found issues:\n- missing tests\nverdict: request-changes";
+        assert_eq!(
+            extract_verdict(content),
+            Some("request-changes".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_verdict_reject() {
+        let content = "Critical security flaw.\nverdict: reject";
+        assert_eq!(extract_verdict(content), Some("reject".to_string()));
+    }
+
+    #[test]
+    fn extract_verdict_case_insensitive() {
+        let content = "Verdict: Approve";
+        assert_eq!(extract_verdict(content), Some("approve".to_string()));
+    }
+
+    #[test]
+    fn extract_verdict_not_found() {
+        let content = "Review complete. All looks good.";
+        assert_eq!(extract_verdict(content), None);
+    }
+
+    #[test]
+    fn extract_verdict_invalid_value_ignored() {
+        let content = "verdict: maybe";
+        assert_eq!(extract_verdict(content), None);
+    }
+
+    // ── is_review_step ─────────────────────────────────────────────────
+
+    #[test]
+    fn is_review_step_true_for_review() {
+        let mut step = make_step("qa", &[]);
+        step.step_type = "agent".to_string();
+        step.config = Some(StepConfigDef {
+            system_prompt: Some("You are bmad/qa. Review the implementation.".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+        });
+        assert!(is_review_step(&step));
+    }
+
+    #[test]
+    fn is_review_step_false_for_implement() {
+        let mut step = make_step("impl", &[]);
+        step.step_type = "agent".to_string();
+        step.config = Some(StepConfigDef {
+            system_prompt: Some("You are a developer. Implement the feature.".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+        });
+        assert!(!is_review_step(&step));
+    }
+
+    #[test]
+    fn is_review_step_false_for_function() {
+        let step = make_step("git_commit", &[]);
+        assert!(!is_review_step(&step));
     }
 }

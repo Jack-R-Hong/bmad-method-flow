@@ -62,6 +62,8 @@ steps:
       system_prompt: |
         You are bmad/qa. Verify this refactoring introduces no behavioral regressions.
         Compare before/after interfaces, check all callers are updated, verify test coverage.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
       user_prompt_template: "Verify no regressions in refactoring"
       max_tokens: 4096
       context_from: [execute_refactor]
