@@ -44,13 +44,14 @@ steps:
     config:
       command: ["git", "worktree", "add", "-b", "feature/{{branch_name}}", "../worktree-{{branch_name}}"]
 
-  # Step 3: Developer implements the feature
+  # Step 3: Developer implements the feature (in worktree)
   - id: dev_implement
     type: agent
     depends_on: [create_worktree]
     executor: provider-claude-code
     config:
       model_tier: balanced
+      working_dir: "{{working_dir}}"
       system_prompt: |
         You are a senior developer. Implement the feature based on the architect's design.
         Follow TDD: write tests first, then implementation code.
@@ -62,11 +63,12 @@ steps:
         max_attempts: 3
         on_failure_of: run_tests
 
-  # Step 3b: Run tests
+  # Step 3b: Run tests (in worktree)
   - id: run_tests
     type: function
     depends_on: [dev_implement]
     config:
+      working_dir: "{{working_dir}}"
       command: ["bash", "-c", "cargo test 2>&1 || npm test 2>&1 || echo 'no test runner found'"]
       timeout_seconds: 120
 
@@ -94,15 +96,16 @@ steps:
     executor: plugin-memory
     optional: true
     config:
+      working_dir: "{{working_dir}}"
       command: ["plugin-memory", "detect-changes"]
       timeout_seconds: 60
 
-  # Step 6: Git commit
+  # Step 6: Git commit (in worktree)
   - id: git_commit
     type: function
     depends_on: [memory_detect_changes]
-    executor: git-ops
     config:
+      working_dir: "{{working_dir}}"
       command: ["bash", "-c", "git add -A && git commit -m \"feat: {{input}}\""]
 
   # Step 7: Re-index after commit

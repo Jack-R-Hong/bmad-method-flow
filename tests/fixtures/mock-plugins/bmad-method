@@ -1,0 +1,14 @@
+#!/bin/bash
+# Mock bmad-method plugin for E2E testing.
+# Reads JSON-RPC from stdin, returns a persona response on stdout.
+read -r request
+
+# Extract agent name from request (best-effort)
+agent=$(echo "$request" | grep -oP '"agent"\s*:\s*"([^"]+)"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+if [ -z "$agent" ]; then
+    agent="bmad/architect"
+fi
+
+cat <<RESPONSE
+{"jsonrpc":"2.0","id":1,"result":{"status":"success","content":"{\"system_prompt\":\"You are $agent. Mock persona for testing.\",\"suggested_config\":{\"model_tier\":\"fast\"}}"}}
+RESPONSE

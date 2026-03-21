@@ -1,0 +1,41 @@
+#!/bin/bash
+# Mock provider-claude-code plugin for E2E testing.
+# Reads JSON-RPC from stdin, returns a success response on stdout.
+# Behavior controlled by MOCK_CLAUDE_RESPONSE env var:
+#   "approve"  → returns content with "verdict: approve"
+#   "reject"   → returns content with "verdict: reject"
+#   "branch"   → returns content with branch_name
+#   "fail"     → returns error
+#   default    → returns generic success content
+read -r request
+
+case "${MOCK_CLAUDE_RESPONSE:-default}" in
+    approve)
+        content="Implementation looks great. All tests pass.\\nverdict: approve"
+        ;;
+    reject)
+        content="Critical security issue found.\\nverdict: reject"
+        ;;
+    request-changes)
+        content="Missing edge case handling.\\nverdict: request-changes"
+        ;;
+    branch)
+        content="Architecture design complete.\\nbranch_name: test-feature-xyz\\nComponents: A, B, C"
+        ;;
+    fail)
+        echo '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"mock LLM failure"}}'
+        exit 0
+        ;;
+    *)
+        content="Mock implementation complete. All tasks done successfully."
+        ;;
+esac
+
+# Wrap in the nested JSON structure that parse_claude_response expects
+inner=$(printf '{"result":"%s","session_id":"mock-session-%s","total_cost_usd":0.001}' "$content" "$$")
+# Escape inner JSON for embedding in outer JSON
+inner_escaped=$(echo "$inner" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+
+cat <<RESPONSE
+{"jsonrpc":"2.0","id":1,"result":{"status":"success","content":"$inner_escaped"}}
+RESPONSE

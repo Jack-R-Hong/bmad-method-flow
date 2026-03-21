@@ -1,0 +1,28 @@
+name: test-retry-loop
+version: 1
+description: "E2E test: retry loop with test failure feedback"
+requires:
+  - plugin: provider-claude-code
+steps:
+  - id: dev_implement
+    type: agent
+    depends_on: []
+    executor: provider-claude-code
+    config:
+      system_prompt: |
+        You are a developer. Implement the feature.
+      user_prompt_template: "Implement: {{input}}"
+      model_tier: fast
+      max_tokens: 1024
+      timeout_seconds: 30
+      retry:
+        max_attempts: 3
+        on_failure_of: run_tests
+
+  - id: run_tests
+    type: function
+    depends_on: [dev_implement]
+    executor: mock-test-runner
+    config:
+      command: ["mock-test-runner"]
+      timeout_seconds: 30

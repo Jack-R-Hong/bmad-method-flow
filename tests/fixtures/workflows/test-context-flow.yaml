@@ -1,0 +1,25 @@
+name: test-context-flow
+version: 1
+description: "E2E test: context_from wires output between steps"
+steps:
+  - id: producer_a
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "output from producer A"]
+      timeout_seconds: 10
+
+  - id: producer_b
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "output from producer B"]
+      timeout_seconds: 10
+
+  - id: consumer
+    type: function
+    depends_on: [producer_a, producer_b]
+    config:
+      command: ["echo", "consumer received context"]
+      context_from: [producer_a, producer_b]
+      timeout_seconds: 10

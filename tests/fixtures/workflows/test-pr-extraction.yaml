@@ -1,0 +1,33 @@
+name: test-pr-extraction
+version: 1
+description: "E2E test: PR title/body extraction from agent output"
+requires:
+  - plugin: bmad-method
+  - plugin: provider-claude-code
+steps:
+  - id: implement
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "implementation done"]
+      timeout_seconds: 10
+
+  - id: generate_pr_body
+    type: agent
+    depends_on: [implement]
+    executor: bmad-method
+    config:
+      system_prompt: |
+        Generate a pull request description.
+        First line is the PR title, then blank line, then body.
+      user_prompt_template: "Generate PR for: {{input}}"
+      model_tier: fast
+      max_tokens: 1024
+      timeout_seconds: 30
+
+  - id: use_pr_fields
+    type: function
+    depends_on: [generate_pr_body]
+    config:
+      command: ["echo", "title={{pr_title}}"]
+      timeout_seconds: 10

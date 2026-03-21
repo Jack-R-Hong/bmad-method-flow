@@ -1,0 +1,31 @@
+name: test-agent-mock
+version: 1
+description: "E2E test: agent step with mock plugins"
+requires:
+  - plugin: bmad-method
+  - plugin: provider-claude-code
+steps:
+  - id: architect
+    type: agent
+    depends_on: []
+    executor: bmad-method
+    config:
+      system_prompt: |
+        You are bmad/architect. Design the solution.
+      user_prompt_template: "Design: {{input}}"
+      model_tier: fast
+      max_tokens: 1024
+      timeout_seconds: 30
+
+  - id: implement
+    type: agent
+    depends_on: [architect]
+    executor: provider-claude-code
+    config:
+      system_prompt: |
+        You are a developer. Implement the feature.
+      user_prompt_template: "Implement: {{input}}"
+      model_tier: balanced
+      max_tokens: 2048
+      context_from: [architect]
+      timeout_seconds: 30

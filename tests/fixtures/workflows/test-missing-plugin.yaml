@@ -1,0 +1,12 @@
+name: test-missing-plugin
+version: 1
+description: "E2E test: required plugin not found"
+requires:
+  - plugin: nonexistent-plugin
+steps:
+  - id: step_a
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "should not run"]
+      timeout_seconds: 10

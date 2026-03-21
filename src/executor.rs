@@ -65,6 +65,10 @@ pub(crate) struct StepConfigDef {
     pub command: Option<Vec<String>>,
     #[serde(default)]
     pub retry: Option<RetryConfig>,
+    /// Working directory for this step. Supports template variables (e.g. {{working_dir}}).
+    /// If not set, falls back to the {{working_dir}} template variable if available.
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 /// Configuration for iterative fix loops.
@@ -104,14 +108,26 @@ pub fn execute_workflow(
     workflow_id: &str,
     user_input: &str,
 ) -> Result<serde_json::Value, WitPluginError> {
+    execute_workflow_in(workflow_id, user_input, Path::new("."))
+}
+
+/// Execute a workflow with a configurable base directory.
+/// All relative paths (config/plugins, config/workflows) are resolved from `base_dir`.
+pub fn execute_workflow_in(
+    workflow_id: &str,
+    user_input: &str,
+    base_dir: &Path,
+) -> Result<serde_json::Value, WitPluginError> {
     let start = Instant::now();
+    let plugins_dir = base_dir.join(PLUGINS_DIR);
+    let workflows_dir = base_dir.join(WORKFLOWS_DIR);
 
     // 1. Load and parse workflow YAML
-    let workflow_path = Path::new(WORKFLOWS_DIR).join(format!("{}.yaml", workflow_id));
+    let workflow_path = workflows_dir.join(format!("{}.yaml", workflow_id));
     let workflow = load_workflow(&workflow_path)?;
 
     // 2. Check required plugins
-    check_required_plugins(&workflow)?;
+    check_required_plugins(&workflow, &plugins_dir)?;
 
     // 3. Topological sort
     let execution_order = topological_sort(&workflow.steps)?;
@@ -186,7 +202,7 @@ pub fn execute_workflow(
             step.step_type
         );
 
-        let result = execute_step(step, &outputs, &template_vars);
+        let result = execute_step(step, &outputs, &template_vars, &plugins_dir);
 
         match result {
             Ok((mut output, session_id)) => {
@@ -196,6 +212,31 @@ pub fn execute_workflow(
                         template_vars.insert("branch_name".to_string(), branch);
                     }
                 }
+
+                // Extract PR title/body from PR-generating agent steps
+                if output.status == StepStatus::Success && is_pr_generation_step(step) {
+                    if let Some(content) = &output.content {
+                        let (title, body) = extract_pr_fields(content);
+                        if !title.is_empty() {
+                            eprintln!("[workflow]   pr: extracted title ({} chars)", title.len());
+                            template_vars.insert("pr_title".to_string(), title);
+                            template_vars.insert("pr_body".to_string(), body);
+                        }
+                    }
+                }
+
+                // Extract worktree path from git worktree add commands
+                if output.status == StepStatus::Success {
+                    if let Some(config) = &step.config {
+                        if let Some(cmd) = &config.command {
+                            if let Some(wt_path) = extract_worktree_path(cmd, &template_vars) {
+                                eprintln!("[workflow]   worktree: {}", wt_path);
+                                template_vars.insert("working_dir".to_string(), wt_path);
+                            }
+                        }
+                    }
+                }
+
                 // Forward session_id for continuity between LLM calls
                 if let Some(sid) = session_id {
                     template_vars.insert("session_id".to_string(), sid);
@@ -384,10 +425,10 @@ fn load_workflow(path: &Path) -> Result<WorkflowDef, WitPluginError> {
 
 // ── Plugin availability ────────────────────────────────────────────────────
 
-fn check_required_plugins(workflow: &WorkflowDef) -> Result<(), WitPluginError> {
+fn check_required_plugins(workflow: &WorkflowDef, plugins_dir: &Path) -> Result<(), WitPluginError> {
     if let Some(requires) = &workflow.requires {
         for req in requires {
-            let plugin_path = Path::new(PLUGINS_DIR).join(&req.plugin);
+            let plugin_path = plugins_dir.join(&req.plugin);
             if !plugin_path.exists() && !req.optional {
                 return Err(WitPluginError::not_found(format!(
                     "required plugin '{}' not found at {}",
@@ -539,6 +580,44 @@ fn is_review_step(step: &StepDef) -> bool {
     lower.contains("review") || lower.contains("qa")
 }
 
+/// Check if a step is a PR-generating agent step (system_prompt mentions "pull request" or "PR").
+fn is_pr_generation_step(step: &StepDef) -> bool {
+    if step.step_type != "agent" {
+        return false;
+    }
+    let prompt = step
+        .config
+        .as_ref()
+        .and_then(|c| c.system_prompt.as_deref())
+        .unwrap_or("");
+    let lower = prompt.to_lowercase();
+    lower.contains("pull request") || lower.contains("pr description") || lower.contains("pr body")
+}
+
+/// Extract worktree path from a git worktree add command.
+/// Returns the resolved path if the command contains "worktree" and "add".
+fn extract_worktree_path(
+    command: &[String],
+    template_vars: &HashMap<String, String>,
+) -> Option<String> {
+    let joined = command.join(" ").to_lowercase();
+    if !joined.contains("worktree") || !joined.contains("add") {
+        return None;
+    }
+    // The worktree path is the last positional argument (not a flag)
+    // Resolve template variables first
+    let resolved: Vec<String> = command
+        .iter()
+        .map(|part| substitute_templates(part, template_vars))
+        .collect();
+    // Find last arg that doesn't start with '-' and isn't "git"/"worktree"/"add"
+    resolved
+        .iter()
+        .rev()
+        .find(|arg| !arg.starts_with('-') && !["git", "worktree", "add"].contains(&arg.as_str()))
+        .cloned()
+}
+
 // ── PR fields extraction (for auto-generated PRs) ─────────────────────────
 
 /// Extract PR title (first line, max 72 chars) and body (rest) from agent output.
@@ -668,6 +747,7 @@ fn execute_step(
     step: &StepDef,
     outputs: &HashMap<String, StepOutput>,
     template_vars: &HashMap<String, String>,
+    plugins_dir: &Path,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let timeout_secs = step
         .config
@@ -676,8 +756,8 @@ fn execute_step(
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
     match step.step_type.as_str() {
-        "agent" => execute_agent_step(step, outputs, template_vars, timeout_secs),
-        "function" => execute_function_step(step, template_vars, timeout_secs).map(|o| (o, None)),
+        "agent" => execute_agent_step(step, outputs, template_vars, timeout_secs, plugins_dir),
+        "function" => execute_function_step(step, template_vars, timeout_secs, plugins_dir).map(|o| (o, None)),
         other => Err(WitPluginError::invalid_input(format!(
             "step '{}': unknown step type '{}'",
             step.id, other
@@ -699,6 +779,7 @@ fn execute_agent_step(
     outputs: &HashMap<String, StepOutput>,
     template_vars: &HashMap<String, String>,
     timeout_secs: u64,
+    plugins_dir: &Path,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let start = Instant::now();
 
@@ -738,6 +819,7 @@ fn execute_agent_step(
             template_vars,
             timeout_secs,
             start,
+            plugins_dir,
         )
     } else {
         execute_direct_agent_step(
@@ -748,6 +830,7 @@ fn execute_agent_step(
             template_vars,
             timeout_secs,
             start,
+            plugins_dir,
         )
     }
 }
@@ -762,8 +845,9 @@ fn execute_bmad_agent_step(
     template_vars: &HashMap<String, String>,
     timeout_secs: u64,
     start: Instant,
+    plugins_dir: &Path,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
-    let bmad_binary = Path::new(PLUGINS_DIR).join("bmad-method");
+    let bmad_binary = plugins_dir.join("bmad-method");
     if !bmad_binary.exists() {
         return Err(WitPluginError::not_found(format!(
             "step '{}': bmad-method not found at {}",
@@ -772,7 +856,7 @@ fn execute_bmad_agent_step(
         )));
     }
 
-    let claude_binary = Path::new(PLUGINS_DIR).join("provider-claude-code");
+    let claude_binary = plugins_dir.join("provider-claude-code");
     if !claude_binary.exists() {
         return Err(WitPluginError::not_found(format!(
             "step '{}': provider-claude-code not found (required for bmad agent execution)",
@@ -862,6 +946,15 @@ fn execute_bmad_agent_step(
     if let Some(session_id) = template_vars.get("session_id") {
         parameters.insert("session_id".to_string(), serde_json::json!(session_id));
     }
+    // Forward working_dir so Claude Code runs in the right directory
+    let work_dir = config
+        .working_dir
+        .as_deref()
+        .map(|wd| substitute_templates(wd, template_vars))
+        .or_else(|| template_vars.get("working_dir").cloned());
+    if let Some(ref wd) = work_dir {
+        parameters.insert("working_dir".to_string(), serde_json::json!(wd));
+    }
 
     let claude_request = serde_json::json!({
         "jsonrpc": "2.0",
@@ -899,8 +992,9 @@ fn execute_direct_agent_step(
     template_vars: &HashMap<String, String>,
     timeout_secs: u64,
     start: Instant,
+    plugins_dir: &Path,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
-    let plugin_binary = Path::new(PLUGINS_DIR).join(executor);
+    let plugin_binary = plugins_dir.join(executor);
     if !plugin_binary.exists() {
         return Err(WitPluginError::not_found(format!(
             "step '{}': executor '{}' not found at {}",
@@ -922,6 +1016,15 @@ fn execute_direct_agent_step(
     }
     if let Some(session_id) = template_vars.get("session_id") {
         parameters.insert("session_id".to_string(), serde_json::json!(session_id));
+    }
+    // Forward working_dir
+    let work_dir = config
+        .working_dir
+        .as_deref()
+        .map(|wd| substitute_templates(wd, template_vars))
+        .or_else(|| template_vars.get("working_dir").cloned());
+    if let Some(ref wd) = work_dir {
+        parameters.insert("working_dir".to_string(), serde_json::json!(wd));
     }
 
     let rpc_request = serde_json::json!({
@@ -1077,6 +1180,7 @@ fn execute_function_step(
     step: &StepDef,
     template_vars: &HashMap<String, String>,
     timeout_secs: u64,
+    plugins_dir: &Path,
 ) -> Result<StepOutput, WitPluginError> {
     let start = Instant::now();
 
@@ -1107,29 +1211,44 @@ fn execute_function_step(
         .map(|part| substitute_templates(part, template_vars))
         .collect();
 
-    // Resolve program path: check config/plugins/ first, then PATH
-    let program = if let Some(executor) = &step.executor {
-        let plugin_path = Path::new(PLUGINS_DIR).join(executor);
+    // Resolve program path: check config/plugins/ for command[0], then use PATH.
+    // NOTE: The `executor` field on function steps is for dependency validation only
+    // (checked by check_required_plugins). The actual program comes from command[0].
+    let program = {
+        let plugin_path = plugins_dir.join(&resolved_cmd[0]);
         if plugin_path.exists() {
             plugin_path.to_string_lossy().to_string()
         } else {
             resolved_cmd[0].clone()
         }
-    } else {
-        resolved_cmd[0].clone()
     };
 
-    let child = Command::new(&program)
-        .args(&resolved_cmd[1..])
+    // Resolve working directory: step config > template var > inherit
+    let work_dir = config
+        .working_dir
+        .as_deref()
+        .map(|wd| substitute_templates(wd, template_vars))
+        .or_else(|| template_vars.get("working_dir").cloned());
+
+    let mut cmd = Command::new(&program);
+    cmd.args(&resolved_cmd[1..])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            WitPluginError::internal(format!(
-                "step '{}': failed to spawn '{}': {}",
-                step.id, program, e
-            ))
-        })?;
+        .stderr(Stdio::piped());
+
+    if let Some(ref wd) = work_dir {
+        let wd_path = Path::new(wd);
+        if wd_path.exists() {
+            cmd.current_dir(wd_path);
+            eprintln!("[workflow]   cwd: {}", wd);
+        }
+    }
+
+    let child = cmd.spawn().map_err(|e| {
+        WitPluginError::internal(format!(
+            "step '{}': failed to spawn '{}': {}",
+            step.id, program, e
+        ))
+    })?;
 
     // Timeout watchdog
     let child_id = child.id();
@@ -1559,6 +1678,7 @@ mod tests {
             timeout_seconds: None,
             command: None,
             retry: None,
+            working_dir: None,
         });
 
         let mut outputs = HashMap::new();
@@ -1683,6 +1803,7 @@ mod tests {
             timeout_seconds: None,
             command: None,
             retry: None,
+            working_dir: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/architect");
     }
@@ -1698,6 +1819,7 @@ mod tests {
             timeout_seconds: None,
             command: None,
             retry: None,
+            working_dir: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/architect");
     }
@@ -1713,6 +1835,7 @@ mod tests {
             timeout_seconds: None,
             command: None,
             retry: None,
+            working_dir: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/qa");
     }
@@ -1773,6 +1896,7 @@ mod tests {
             timeout_seconds: None,
             command: None,
             retry: None,
+            working_dir: None,
         });
         assert!(is_review_step(&step));
     }
@@ -1790,6 +1914,7 @@ mod tests {
             timeout_seconds: None,
             command: None,
             retry: None,
+            working_dir: None,
         });
         assert!(!is_review_step(&step));
     }

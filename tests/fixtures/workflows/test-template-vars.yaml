@@ -1,0 +1,17 @@
+name: test-template-vars
+version: 1
+description: "E2E test: template variable substitution"
+steps:
+  - id: use_input
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "processing: {{input}}"]
+      timeout_seconds: 10
+
+  - id: use_multi
+    type: function
+    depends_on: [use_input]
+    config:
+      command: ["echo", "input={{input}} done=true"]
+      timeout_seconds: 10

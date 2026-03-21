@@ -1,0 +1,11 @@
+name: test-timeout
+version: 1
+description: "E2E test: step exceeds timeout"
+steps:
+  - id: slow_step
+    type: function
+    depends_on: []
+    executor: mock-slow-cmd
+    config:
+      command: ["mock-slow-cmd"]
+      timeout_seconds: 2

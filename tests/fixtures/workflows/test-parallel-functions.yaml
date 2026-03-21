@@ -1,0 +1,31 @@
+name: test-parallel-functions
+version: 1
+description: "E2E test: parallel function steps (diamond DAG)"
+steps:
+  - id: root
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "root step"]
+      timeout_seconds: 10
+
+  - id: branch_a
+    type: function
+    depends_on: [root]
+    config:
+      command: ["echo", "branch A"]
+      timeout_seconds: 10
+
+  - id: branch_b
+    type: function
+    depends_on: [root]
+    config:
+      command: ["echo", "branch B"]
+      timeout_seconds: 10
+
+  - id: join
+    type: function
+    depends_on: [branch_a, branch_b]
+    config:
+      command: ["echo", "joined output"]
+      timeout_seconds: 10

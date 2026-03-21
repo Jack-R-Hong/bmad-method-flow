@@ -1,0 +1,5 @@
+#!/bin/bash
+# Mock slow command for timeout testing.
+# Sleeps for 60 seconds (longer than any test timeout).
+sleep 60
+echo "should not reach here"

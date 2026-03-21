@@ -17,11 +17,12 @@ impl E2EHarness {
     /// Create a new harness by copying the fixture project to a temp directory.
     pub fn new(fixture_path: &Path) -> Result<Self, String> {
         let temp_dir = std::env::temp_dir().join(format!(
-            "pulse-e2e-{}",
+            "pulse-e2e-{}-{:?}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_millis()
+                .as_nanos(),
+            std::thread::current().id()
         ));
 
         // Copy fixture to temp dir
@@ -30,7 +31,7 @@ impl E2EHarness {
 
         // Initialize git repo if not already
         if !temp_dir.join(".git").exists() {
-            run_cmd(&temp_dir, "git", &["init"])?;
+            run_cmd(&temp_dir, "git", &["init", "--initial-branch=main"])?;
             run_cmd(&temp_dir, "git", &["add", "-A"])?;
             run_cmd(
                 &temp_dir,

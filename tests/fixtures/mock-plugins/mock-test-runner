@@ -1,0 +1,31 @@
+#!/bin/bash
+# Mock test runner for E2E testing.
+# Behavior controlled by MOCK_TEST_RESULT env var:
+#   "pass" → exit 0 with passing test output
+#   "fail" → exit 1 with failing test output
+#   default → exit 0
+
+case "${MOCK_TEST_RESULT:-pass}" in
+    pass)
+        echo "running 3 tests"
+        echo "test test_add ... ok"
+        echo "test test_subtract ... ok"
+        echo "test test_multiply ... ok"
+        echo ""
+        echo "test result: ok. 3 passed; 0 failed; 0 ignored"
+        exit 0
+        ;;
+    fail)
+        echo "running 3 tests"
+        echo "test test_add ... ok"
+        echo "test test_subtract ... ok"
+        echo "test test_multiply ... FAILED"
+        echo ""
+        echo "failures:"
+        echo "---- test_multiply stdout ----"
+        echo "thread 'test_multiply' panicked at 'assertion failed: multiply(2, 3) == 6'"
+        echo ""
+        echo "test result: FAILED. 2 passed; 1 failed; 0 ignored"
+        exit 1
+        ;;
+esac

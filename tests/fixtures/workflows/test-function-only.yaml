@@ -1,0 +1,24 @@
+name: test-function-only
+version: 1
+description: "E2E test: function-only workflow with echo commands"
+steps:
+  - id: step_a
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "step_a output for {{input}}"]
+      timeout_seconds: 10
+
+  - id: step_b
+    type: function
+    depends_on: [step_a]
+    config:
+      command: ["echo", "step_b depends on step_a"]
+      timeout_seconds: 10
+
+  - id: step_c
+    type: function
+    depends_on: [step_b]
+    config:
+      command: ["echo", "step_c final output"]
+      timeout_seconds: 10

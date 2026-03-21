@@ -1,0 +1,25 @@
+name: test-optional-skip
+version: 1
+description: "E2E test: optional step fails, downstream continues"
+steps:
+  - id: step_ok
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "first step ok"]
+      timeout_seconds: 10
+
+  - id: step_optional_fail
+    type: function
+    depends_on: [step_ok]
+    optional: true
+    config:
+      command: ["bash", "-c", "echo 'optional failing' && exit 1"]
+      timeout_seconds: 10
+
+  - id: step_after_optional
+    type: function
+    depends_on: [step_optional_fail]
+    config:
+      command: ["echo", "continued after optional failure"]
+      timeout_seconds: 10

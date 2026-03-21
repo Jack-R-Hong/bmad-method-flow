@@ -65,13 +65,14 @@ steps:
     config:
       command: ["git", "worktree", "add", "-b", "story/{{branch_name}}", "../worktree-{{branch_name}}"]
 
-  # Step 4: Developer implements with TDD
+  # Step 4: Developer implements with TDD (in worktree)
   - id: implement
     type: agent
     depends_on: [create_worktree]
     executor: provider-claude-code
     config:
       model_tier: balanced
+      working_dir: "{{working_dir}}"
       system_prompt: |
         You are a senior developer implementing a user story with TDD.
         Write tests first based on acceptance criteria, then implement to make them pass.
@@ -83,11 +84,12 @@ steps:
         max_attempts: 3
         on_failure_of: run_tests
 
-  # Step 4b: Run tests
+  # Step 4b: Run tests (in worktree)
   - id: run_tests
     type: function
     depends_on: [implement]
     config:
+      working_dir: "{{working_dir}}"
       command: ["bash", "-c", "cargo test 2>&1 || npm test 2>&1 || echo 'no test runner found'"]
       timeout_seconds: 120
 
@@ -108,22 +110,23 @@ steps:
       context_from: [prepare_story, implement]
       timeout_seconds: 300
 
-  # Step 6: Detect changes & risk assessment
+  # Step 6: Detect changes & risk assessment (in worktree)
   - id: memory_detect_changes
     type: function
     depends_on: [qa_review]
     executor: plugin-memory
     optional: true
     config:
+      working_dir: "{{working_dir}}"
       command: ["plugin-memory", "detect-changes"]
       timeout_seconds: 60
 
-  # Step 7: Commit
+  # Step 7: Commit (in worktree)
   - id: git_commit
     type: function
     depends_on: [memory_detect_changes]
-    executor: git-ops
     config:
+      working_dir: "{{working_dir}}"
       command: ["bash", "-c", "git add -A && git commit -m \"feat: {{input}}\""]
 
   # Step 8: Re-index after commit

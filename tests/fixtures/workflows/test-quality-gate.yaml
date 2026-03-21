@@ -1,0 +1,33 @@
+name: test-quality-gate
+version: 1
+description: "E2E test: quality gate via review verdict"
+requires:
+  - plugin: bmad-method
+  - plugin: provider-claude-code
+steps:
+  - id: implement
+    type: function
+    depends_on: []
+    config:
+      command: ["echo", "implementation done"]
+      timeout_seconds: 10
+
+  - id: qa_review
+    type: agent
+    depends_on: [implement]
+    executor: bmad-method
+    config:
+      system_prompt: |
+        You are bmad/qa. Review the implementation.
+        End with verdict: approve OR verdict: reject
+      user_prompt_template: "Review: {{input}}"
+      model_tier: fast
+      max_tokens: 1024
+      timeout_seconds: 30
+
+  - id: git_commit
+    type: function
+    depends_on: [qa_review]
+    config:
+      command: ["echo", "committed"]
+      timeout_seconds: 10
