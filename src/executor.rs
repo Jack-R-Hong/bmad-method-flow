@@ -157,12 +157,16 @@ pub fn execute_workflow(
         let result = execute_step(step, &outputs, &template_vars);
 
         match result {
-            Ok(output) => {
+            Ok((output, session_id)) => {
                 // Extract branch_name from agent output if present
                 if let Some(content) = &output.content {
                     if let Some(branch) = extract_branch_name(content) {
                         template_vars.insert("branch_name".to_string(), branch);
                     }
+                }
+                // Forward session_id for continuity between LLM calls
+                if let Some(sid) = session_id {
+                    template_vars.insert("session_id".to_string(), sid);
                 }
 
                 if output.status != StepStatus::Success && !step.optional {
@@ -404,11 +408,12 @@ fn assemble_context(step: &StepDef, outputs: &HashMap<String, StepOutput>) -> St
 
 // ── Step execution dispatch ────────────────────────────────────────────────
 
+/// Returns (StepOutput, Option<session_id>)
 fn execute_step(
     step: &StepDef,
     outputs: &HashMap<String, StepOutput>,
     template_vars: &HashMap<String, String>,
-) -> Result<StepOutput, WitPluginError> {
+) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let timeout_secs = step
         .config
         .as_ref()
@@ -417,7 +422,8 @@ fn execute_step(
 
     match step.step_type.as_str() {
         "agent" => execute_agent_step(step, outputs, template_vars, timeout_secs),
-        "function" => execute_function_step(step, template_vars, timeout_secs),
+        "function" => execute_function_step(step, template_vars, timeout_secs)
+            .map(|o| (o, None)),
         other => Err(WitPluginError::invalid_input(format!(
             "step '{}': unknown step type '{}'",
             step.id, other
@@ -425,14 +431,21 @@ fn execute_step(
     }
 }
 
-// ── Agent step execution (JSON-RPC over stdio) ─────────────────────────────
+// ── Agent step execution ────────────────────────────────────────────────────
+//
+// Two execution patterns:
+//   1. executor: bmad-method  → two-stage: fetch persona, then call provider-claude-code
+//   2. executor: provider-claude-code → direct: call with workflow system_prompt
+//
+// Session continuity: provider-claude-code returns session_id which is forwarded
+// to subsequent calls via template_vars["session_id"].
 
 fn execute_agent_step(
     step: &StepDef,
     outputs: &HashMap<String, StepOutput>,
     template_vars: &HashMap<String, String>,
     timeout_secs: u64,
-) -> Result<StepOutput, WitPluginError> {
+) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let start = Instant::now();
 
     let executor = step.executor.as_deref().ok_or_else(|| {
@@ -448,16 +461,6 @@ fn execute_agent_step(
             step.id
         ))
     })?;
-
-    let plugin_binary = Path::new(PLUGINS_DIR).join(executor);
-    if !plugin_binary.exists() {
-        return Err(WitPluginError::not_found(format!(
-            "step '{}': executor '{}' not found at {}",
-            step.id,
-            executor,
-            plugin_binary.display()
-        )));
-    }
 
     // Build the prompt with context injection
     let context = assemble_context(step, outputs);
@@ -481,63 +484,170 @@ fn execute_agent_step(
         )
     };
 
-    // Build JSON-RPC request
-    let (task_input, step_config) = build_rpc_params(step, executor, &full_prompt, config);
+    if executor == "bmad-method" {
+        execute_bmad_agent_step(step, &full_prompt, config, template_vars, timeout_secs, start)
+    } else {
+        execute_direct_agent_step(step, executor, &full_prompt, config, template_vars, timeout_secs, start)
+    }
+}
 
-    let rpc_request = serde_json::json!({
+/// Two-stage execution for bmad-method agent steps:
+/// 1. Call bmad-method to get agent persona (system prompt + config)
+/// 2. Call provider-claude-code with that persona to do actual LLM reasoning
+fn execute_bmad_agent_step(
+    step: &StepDef,
+    prompt: &str,
+    config: &StepConfigDef,
+    template_vars: &HashMap<String, String>,
+    timeout_secs: u64,
+    start: Instant,
+) -> Result<(StepOutput, Option<String>), WitPluginError> {
+    let bmad_binary = Path::new(PLUGINS_DIR).join("bmad-method");
+    if !bmad_binary.exists() {
+        return Err(WitPluginError::not_found(format!(
+            "step '{}': bmad-method not found at {}",
+            step.id,
+            bmad_binary.display()
+        )));
+    }
+
+    let claude_binary = Path::new(PLUGINS_DIR).join("provider-claude-code");
+    if !claude_binary.exists() {
+        return Err(WitPluginError::not_found(format!(
+            "step '{}': provider-claude-code not found (required for bmad agent execution)",
+            step.id
+        )));
+    }
+
+    // Stage 1: Get agent persona from bmad-method
+    let agent_name = extract_agent_name(config);
+    eprintln!("[workflow]   stage 1: fetching persona '{}'", agent_name);
+
+    let persona_request = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "step-executor.execute",
         "params": {
-            "task": task_input,
-            "config": step_config,
+            "task": {
+                "task_id": format!("wf-{}-persona", step.id),
+                "description": "fetch agent persona",
+                "input": {
+                    "agent": agent_name,
+                    "prompt": prompt,
+                },
+            },
+            "config": {
+                "step_id": format!("{}-persona", step.id),
+                "step_type": "agent",
+            }
         }
     });
 
-    let response = spawn_plugin_rpc(&plugin_binary, &rpc_request, timeout_secs)?;
+    let persona_response = spawn_plugin_rpc(&bmad_binary, &persona_request, 30)?;
+    let persona_content = extract_rpc_content(&persona_response)?;
+
+    // Parse the persona JSON to extract the agent's system_prompt
+    let persona: serde_json::Value = serde_json::from_str(&persona_content).map_err(|e| {
+        WitPluginError::internal(format!(
+            "step '{}': failed to parse persona JSON: {}",
+            step.id, e
+        ))
+    })?;
+
+    let agent_system_prompt = persona
+        .get("system_prompt")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+
+    // Merge: workflow system_prompt provides task-specific instructions,
+    // persona system_prompt provides the agent's character/role
+    let merged_system_prompt = if let Some(workflow_sp) = &config.system_prompt {
+        format!(
+            "{}\n\n## Task-Specific Instructions\n{}",
+            agent_system_prompt, workflow_sp
+        )
+    } else {
+        agent_system_prompt.to_string()
+    };
+
+    // Extract suggested config from persona
+    let suggested_model = persona
+        .get("suggested_config")
+        .and_then(|c| c.get("model_tier"))
+        .and_then(|m| m.as_str());
+
+    let model_tier = config
+        .model_tier
+        .as_deref()
+        .or(suggested_model)
+        .unwrap_or("balanced");
+
+    // Stage 2: Call provider-claude-code with the persona
+    eprintln!(
+        "[workflow]   stage 2: executing via provider-claude-code (model: {})",
+        model_tier
+    );
+
+    let mut parameters = serde_json::Map::new();
+    parameters.insert(
+        "system_prompt".to_string(),
+        serde_json::json!(merged_system_prompt),
+    );
+    parameters.insert("model_tier".to_string(), serde_json::json!(model_tier));
+    if let Some(tokens) = config.max_tokens {
+        parameters.insert("max_tokens".to_string(), serde_json::json!(tokens));
+    }
+    // Forward session_id for continuity
+    if let Some(session_id) = template_vars.get("session_id") {
+        parameters.insert("session_id".to_string(), serde_json::json!(session_id));
+    }
+
+    let claude_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "step-executor.execute",
+        "params": {
+            "task": {
+                "task_id": format!("wf-{}", step.id),
+                "description": prompt,
+                "input": {
+                    "prompt": prompt,
+                },
+            },
+            "config": {
+                "step_id": step.id,
+                "step_type": "agent",
+                "timeout_secs": config.timeout_seconds.unwrap_or(timeout_secs),
+                "parameters": parameters,
+            }
+        }
+    });
+
+    let response = spawn_plugin_rpc(&claude_binary, &claude_request, timeout_secs)?;
     let elapsed = start.elapsed().as_millis() as u64;
 
-    parse_step_response(&step.id, response, elapsed)
+    parse_claude_response(&step.id, response, elapsed)
 }
 
-fn build_rpc_params(
+/// Direct execution for provider-claude-code (or other non-bmad executors)
+fn execute_direct_agent_step(
     step: &StepDef,
     executor: &str,
     prompt: &str,
     config: &StepConfigDef,
-) -> (serde_json::Value, serde_json::Value) {
-    let task_input = match executor {
-        "bmad-method" => {
-            // Extract agent role from system_prompt (e.g. "bmad/architect")
-            let agent = config
-                .system_prompt
-                .as_deref()
-                .and_then(|sp| {
-                    sp.split_whitespace()
-                        .find(|w| w.starts_with("bmad/"))
-                        .map(|w| w.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '-').to_string())
-                })
-                .unwrap_or_else(|| "bmad/architect".to_string());
-
-            serde_json::json!({
-                "task_id": format!("wf-{}", step.id),
-                "description": prompt,
-                "input": {
-                    "agent": agent,
-                    "prompt": prompt,
-                },
-            })
-        }
-        _ => {
-            serde_json::json!({
-                "task_id": format!("wf-{}", step.id),
-                "description": prompt,
-                "input": {
-                    "prompt": prompt,
-                },
-            })
-        }
-    };
+    template_vars: &HashMap<String, String>,
+    timeout_secs: u64,
+    start: Instant,
+) -> Result<(StepOutput, Option<String>), WitPluginError> {
+    let plugin_binary = Path::new(PLUGINS_DIR).join(executor);
+    if !plugin_binary.exists() {
+        return Err(WitPluginError::not_found(format!(
+            "step '{}': executor '{}' not found at {}",
+            step.id,
+            executor,
+            plugin_binary.display()
+        )));
+    }
 
     let mut parameters = serde_json::Map::new();
     if let Some(sp) = &config.system_prompt {
@@ -549,15 +659,160 @@ fn build_rpc_params(
     if let Some(tokens) = config.max_tokens {
         parameters.insert("max_tokens".to_string(), serde_json::json!(tokens));
     }
+    if let Some(session_id) = template_vars.get("session_id") {
+        parameters.insert("session_id".to_string(), serde_json::json!(session_id));
+    }
 
-    let step_config = serde_json::json!({
-        "step_id": step.id,
-        "step_type": step.step_type,
-        "timeout_secs": config.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECS),
-        "parameters": parameters,
+    let rpc_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "step-executor.execute",
+        "params": {
+            "task": {
+                "task_id": format!("wf-{}", step.id),
+                "description": prompt,
+                "input": {
+                    "prompt": prompt,
+                },
+            },
+            "config": {
+                "step_id": step.id,
+                "step_type": step.step_type,
+                "timeout_secs": config.timeout_seconds.unwrap_or(timeout_secs),
+                "parameters": parameters,
+            }
+        }
     });
 
-    (task_input, step_config)
+    let response = spawn_plugin_rpc(&plugin_binary, &rpc_request, timeout_secs)?;
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    parse_claude_response(&step.id, response, elapsed)
+}
+
+/// Extract agent name (e.g. "bmad/architect") from workflow step config
+fn extract_agent_name(config: &StepConfigDef) -> String {
+    config
+        .system_prompt
+        .as_deref()
+        .and_then(|sp| {
+            sp.split_whitespace()
+                .find(|w| w.starts_with("bmad/"))
+                .map(|w| {
+                    w.trim_end_matches(|c: char| {
+                        !c.is_alphanumeric() && c != '/' && c != '-'
+                    })
+                    .to_string()
+                })
+        })
+        .unwrap_or_else(|| "bmad/architect".to_string())
+}
+
+/// Extract the content string from a JSON-RPC response
+fn extract_rpc_content(response: &serde_json::Value) -> Result<String, WitPluginError> {
+    if let Some(error) = response.get("error") {
+        let msg = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error");
+        return Err(WitPluginError::internal(msg.to_string()));
+    }
+
+    response
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| WitPluginError::internal("no content in plugin response".to_string()))
+}
+
+/// Parse provider-claude-code response, extracting the actual result text
+/// and session_id from the nested JSON content.
+/// Returns (StepOutput, Option<session_id>).
+fn parse_claude_response(
+    step_id: &str,
+    response: serde_json::Value,
+    elapsed_ms: u64,
+) -> Result<(StepOutput, Option<String>), WitPluginError> {
+    // Check for JSON-RPC error
+    if let Some(error) = response.get("error") {
+        let msg = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error");
+        return Ok((
+            StepOutput {
+                step_id: step_id.to_string(),
+                status: StepStatus::Failed,
+                content: None,
+                execution_time_ms: elapsed_ms,
+                error: Some(msg.to_string()),
+            },
+            None,
+        ));
+    }
+
+    let result = response
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    let status_str = result
+        .get("status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("unknown");
+
+    if status_str != "success" {
+        return Ok((
+            StepOutput {
+                step_id: step_id.to_string(),
+                status: StepStatus::Failed,
+                content: None,
+                execution_time_ms: elapsed_ms,
+                error: Some(format!("step returned status: {}", status_str)),
+            },
+            None,
+        ));
+    }
+
+    // provider-claude-code returns content as a JSON string:
+    // {"result": "actual text", "session_id": "...", "total_cost_usd": 0.01}
+    let content_str = result
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+
+    // Try to parse the inner JSON to extract actual result text and session_id
+    let (actual_content, session_id) =
+        if let Ok(inner) = serde_json::from_str::<serde_json::Value>(content_str) {
+            let text = inner
+                .get("result")
+                .and_then(|r| r.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| content_str.to_string());
+            let sid = inner
+                .get("session_id")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string());
+            (text, sid)
+        } else {
+            (content_str.to_string(), None)
+        };
+
+    Ok((
+        StepOutput {
+            step_id: step_id.to_string(),
+            status: StepStatus::Success,
+            content: if actual_content.is_empty() {
+                None
+            } else {
+                Some(actual_content)
+            },
+            execution_time_ms: elapsed_ms,
+            error: None,
+        },
+        session_id,
+    ))
 }
 
 // ── Function step execution (direct command) ───────────────────────────────
@@ -781,59 +1036,6 @@ fn spawn_plugin_rpc(
 
     response.ok_or_else(|| {
         WitPluginError::internal("plugin returned no JSON-RPC response")
-    })
-}
-
-fn parse_step_response(
-    step_id: &str,
-    response: serde_json::Value,
-    elapsed_ms: u64,
-) -> Result<StepOutput, WitPluginError> {
-    // Check for JSON-RPC error
-    if let Some(error) = response.get("error") {
-        let msg = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown error");
-        return Ok(StepOutput {
-            step_id: step_id.to_string(),
-            status: StepStatus::Failed,
-            content: None,
-            execution_time_ms: elapsed_ms,
-            error: Some(msg.to_string()),
-        });
-    }
-
-    let result = response
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-
-    let status_str = result
-        .get("status")
-        .and_then(|s| s.as_str())
-        .unwrap_or("unknown");
-    let content = result
-        .get("content")
-        .and_then(|c| c.as_str())
-        .map(|s| s.to_string());
-
-    let status = if status_str == "success" {
-        StepStatus::Success
-    } else {
-        StepStatus::Failed
-    };
-
-    Ok(StepOutput {
-        step_id: step_id.to_string(),
-        status: status.clone(),
-        content,
-        execution_time_ms: elapsed_ms,
-        error: if status == StepStatus::Failed {
-            Some(format!("step returned status: {}", status_str))
-        } else {
-            None
-        },
     })
 }
 
@@ -1106,27 +1308,46 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── parse_step_response ────────────────────────────────────────────
+    // ── parse_claude_response ─────────────────────────────────────────
 
     #[test]
-    fn parse_response_success() {
+    fn parse_claude_response_success_with_session_id() {
         let response = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "result": {
                 "step_id": "s1",
                 "status": "success",
-                "content": "hello",
+                "content": "{\"result\":\"hello world\",\"session_id\":\"abc-123\",\"total_cost_usd\":0.01}",
                 "execution_time_ms": 100,
             }
         });
-        let output = parse_step_response("s1", response, 100).unwrap();
+        let (output, session_id) = parse_claude_response("s1", response, 100).unwrap();
         assert_eq!(output.status, StepStatus::Success);
-        assert_eq!(output.content.as_deref(), Some("hello"));
+        assert_eq!(output.content.as_deref(), Some("hello world"));
+        assert_eq!(session_id.as_deref(), Some("abc-123"));
     }
 
     #[test]
-    fn parse_response_error() {
+    fn parse_claude_response_plain_content() {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "step_id": "s1",
+                "status": "success",
+                "content": "plain text output",
+                "execution_time_ms": 50,
+            }
+        });
+        let (output, session_id) = parse_claude_response("s1", response, 50).unwrap();
+        assert_eq!(output.status, StepStatus::Success);
+        assert_eq!(output.content.as_deref(), Some("plain text output"));
+        assert!(session_id.is_none());
+    }
+
+    #[test]
+    fn parse_claude_response_error() {
         let response = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -1135,64 +1356,53 @@ mod tests {
                 "message": "something broke",
             }
         });
-        let output = parse_step_response("s1", response, 50).unwrap();
+        let (output, session_id) = parse_claude_response("s1", response, 50).unwrap();
         assert_eq!(output.status, StepStatus::Failed);
         assert!(output.error.as_deref().unwrap().contains("something broke"));
+        assert!(session_id.is_none());
     }
 
-    // ── build_rpc_params ───────────────────────────────────────────────
+    // ── extract_agent_name ─────────────────────────────────────────────
 
     #[test]
-    fn build_rpc_params_bmad_extracts_agent() {
-        let step = StepDef {
-            id: "test".to_string(),
-            step_type: "agent".to_string(),
-            executor: Some("bmad-method".to_string()),
-            depends_on: vec![],
-            optional: false,
-            config: Some(StepConfigDef {
-                system_prompt: Some(
-                    "You are bmad/architect. Design the system.".to_string(),
-                ),
-                user_prompt_template: None,
-                model_tier: Some("balanced".to_string()),
-                max_tokens: Some(4096),
-                context_from: None,
-                timeout_seconds: None,
-                command: None,
-            }),
+    fn extract_agent_name_from_system_prompt() {
+        let config = StepConfigDef {
+            system_prompt: Some("You are bmad/architect. Design the system.".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
         };
-        let config = step.config.as_ref().unwrap();
-        let (task, cfg) = build_rpc_params(&step, "bmad-method", "test prompt", config);
-
-        assert_eq!(task["input"]["agent"], "bmad/architect");
-        assert_eq!(cfg["parameters"]["model_tier"], "balanced");
-        assert_eq!(cfg["parameters"]["max_tokens"], 4096);
+        assert_eq!(extract_agent_name(&config), "bmad/architect");
     }
 
     #[test]
-    fn build_rpc_params_claude_code() {
-        let step = StepDef {
-            id: "impl".to_string(),
-            step_type: "agent".to_string(),
-            executor: Some("provider-claude-code".to_string()),
-            depends_on: vec![],
-            optional: false,
-            config: Some(StepConfigDef {
-                system_prompt: Some("You are a developer.".to_string()),
-                user_prompt_template: None,
-                model_tier: None,
-                max_tokens: None,
-                context_from: None,
-                timeout_seconds: None,
-                command: None,
-            }),
+    fn extract_agent_name_default_when_missing() {
+        let config = StepConfigDef {
+            system_prompt: Some("You are a developer.".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
         };
-        let config = step.config.as_ref().unwrap();
-        let (task, _cfg) = build_rpc_params(&step, "provider-claude-code", "do it", config);
+        assert_eq!(extract_agent_name(&config), "bmad/architect");
+    }
 
-        assert_eq!(task["input"]["prompt"], "do it");
-        // No agent field for non-bmad executors
-        assert!(task["input"].get("agent").is_none());
+    #[test]
+    fn extract_agent_name_with_punctuation() {
+        let config = StepConfigDef {
+            system_prompt: Some("You are bmad/qa. Review the code.".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+        };
+        assert_eq!(extract_agent_name(&config), "bmad/qa");
     }
 }
