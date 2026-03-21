@@ -16,6 +16,9 @@ pub struct CodingPackInput {
     /// User input / task description for execute-workflow action
     #[serde(default)]
     pub input: Option<String>,
+    /// Data endpoint path for data-query action (set by Pulse proxy)
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 /// Execute a pack-level action.
@@ -33,8 +36,12 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
             let user_input = input.input.as_deref().unwrap_or("");
             to_json_string(crate::executor::execute_workflow(workflow_id, user_input))
         }
+        "data-query" => {
+            let endpoint = input.endpoint.as_deref().unwrap_or("");
+            execute_data_query(endpoint)
+        }
         other => Err(WitPluginError::not_found(format!(
-            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow",
+            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query",
             other
         ))),
     }
@@ -210,6 +217,134 @@ fn pack_status_value() -> Result<serde_json::Value, WitPluginError> {
     }))
 }
 
+/// Handle data-query requests from dashboard proxy.
+/// Routes endpoint paths to internal data functions.
+fn execute_data_query(endpoint: &str) -> Result<String, WitPluginError> {
+    let endpoint = endpoint.trim_start_matches('/');
+    let result = match endpoint {
+        "status" => pack_status_value()?,
+        "workflows/list" => list_workflows_detail_value()?,
+        "agents/list" => list_agents_value()?,
+        ep if ep.starts_with("workflows/") => {
+            let id = ep.strip_prefix("workflows/").unwrap_or("");
+            get_workflow_detail_value(id)?
+        }
+        _ => {
+            return Err(WitPluginError::not_found(format!(
+                "Unknown data endpoint: '{}'. Available: status, workflows/list, agents/list, workflows/{{id}}",
+                endpoint
+            )));
+        }
+    };
+    serde_json::to_string_pretty(&result)
+        .map_err(|e| WitPluginError::internal(format!("JSON serialization error: {e}")))
+}
+
+/// Detailed workflow list for dashboard table view.
+fn list_workflows_detail_value() -> Result<serde_json::Value, WitPluginError> {
+    let workflow_dir = Path::new("config/workflows");
+    let mut workflows = Vec::new();
+
+    if workflow_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(workflow_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(wf) = serde_yaml::from_str::<serde_json::Value>(&content) {
+                            let id = path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("unknown");
+                            let category = if id.starts_with("bootstrap") {
+                                "bootstrap"
+                            } else {
+                                "coding"
+                            };
+                            workflows.push(serde_json::json!({
+                                "id": id,
+                                "description": wf.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+                                "category": category,
+                                "step_count": wf.get("steps").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0),
+                                "requires": wf.get("requires").and_then(|r| r.as_array()).map(|arr| {
+                                    arr.iter().filter_map(|r| r.get("plugin").and_then(|p| p.as_str())).collect::<Vec<_>>().join(", ")
+                                }).unwrap_or_default(),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    workflows.sort_by(|a, b| {
+        let a_id = a["id"].as_str().unwrap_or("");
+        let b_id = b["id"].as_str().unwrap_or("");
+        a_id.cmp(b_id)
+    });
+
+    Ok(serde_json::json!(workflows))
+}
+
+/// BMAD agent list for dashboard table view.
+fn list_agents_value() -> Result<serde_json::Value, WitPluginError> {
+    let agents = serde_json::json!([
+        {"id": "bmad/architect", "name": "Winston", "role": "Architect", "assigned_workflows": "coding-feature-dev, coding-story-dev"},
+        {"id": "bmad/dev", "name": "Amelia", "role": "Developer", "assigned_workflows": "coding-feature-dev, coding-story-dev, coding-bug-fix"},
+        {"id": "bmad/pm", "name": "John", "role": "Product Manager", "assigned_workflows": "coding-feature-dev"},
+        {"id": "bmad/qa", "name": "Quinn", "role": "QA Engineer", "assigned_workflows": "coding-feature-dev, coding-story-dev, coding-review"},
+        {"id": "bmad/sm", "name": "Bob", "role": "Scrum Master", "assigned_workflows": "coding-story-dev"},
+        {"id": "bmad/quick-flow", "name": "Barry", "role": "Quick Flow Solo Dev", "assigned_workflows": "coding-quick-dev"},
+        {"id": "bmad/analyst", "name": "Mary", "role": "Analyst", "assigned_workflows": ""},
+        {"id": "bmad/ux-designer", "name": "Sally", "role": "UX Designer", "assigned_workflows": ""},
+        {"id": "bmad/tech-writer", "name": "Paige", "role": "Tech Writer", "assigned_workflows": ""},
+    ]);
+    Ok(agents)
+}
+
+/// Single workflow detail for dashboard detail view.
+fn get_workflow_detail_value(workflow_id: &str) -> Result<serde_json::Value, WitPluginError> {
+    let path = Path::new("config/workflows").join(format!("{}.yaml", workflow_id));
+    if !path.exists() {
+        return Err(WitPluginError::not_found(format!(
+            "Workflow '{}' not found",
+            workflow_id
+        )));
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| WitPluginError::internal(format!("Cannot read workflow: {e}")))?;
+    let wf: serde_json::Value = serde_yaml::from_str(&content)
+        .map_err(|e| WitPluginError::internal(format!("Invalid YAML: {e}")))?;
+
+    let steps = wf
+        .get("steps")
+        .and_then(|s| s.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let step_pipeline: Vec<String> = steps
+        .iter()
+        .filter_map(|s| s.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+        .collect();
+
+    let category = if workflow_id.starts_with("bootstrap") {
+        "bootstrap"
+    } else {
+        "coding"
+    };
+
+    Ok(serde_json::json!({
+        "id": workflow_id,
+        "description": wf.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+        "category": category,
+        "step_count": steps.len(),
+        "step_pipeline": step_pipeline.join(" → "),
+        "requires": wf.get("requires").and_then(|r| r.as_array()).map(|arr| {
+            arr.iter().filter_map(|r| r.get("plugin").and_then(|p| p.as_str())).collect::<Vec<_>>().join(", ")
+        }).unwrap_or_default(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +356,7 @@ mod tests {
             target: None,
             workflow_id: None,
             input: None,
+            endpoint: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -235,6 +371,7 @@ mod tests {
             target: None,
             workflow_id: None,
             input: None,
+            endpoint: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -249,6 +386,7 @@ mod tests {
             target: None,
             workflow_id: None,
             input: None,
+            endpoint: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -263,6 +401,7 @@ mod tests {
             target: None,
             workflow_id: None,
             input: None,
+            endpoint: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -276,6 +415,7 @@ mod tests {
             target: None,
             workflow_id: None,
             input: None,
+            endpoint: None,
         };
         let err = execute_action(&input).unwrap_err();
         assert_eq!(err.code, "not_found");
