@@ -208,7 +208,7 @@ impl DashboardExtensionPlugin for CodingPackPlugin {
                 "title": "Workflow Detail",
                 "path": "/workflows/:id",
                 "icon": "git-branch",
-                "nav_order": -1,
+                "nav_order": 99,
                 "description": "Detailed workflow steps and execution history",
                 "layout": {
                     "type": "detail",
@@ -572,7 +572,7 @@ mod tests {
         // Workflow detail
         assert_eq!(pages[2]["id"], "workflow-detail");
         assert_eq!(pages[2]["layout"]["type"], "detail");
-        assert_eq!(pages[2]["nav_order"], -1); // hidden from nav
+        assert_eq!(pages[2]["nav_order"], 99); // hidden from nav (high order)
 
         // Agents table
         assert_eq!(pages[3]["id"], "agents");
