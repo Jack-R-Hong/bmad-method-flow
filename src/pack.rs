@@ -10,6 +10,12 @@ pub struct CodingPackInput {
     /// Optional: target plugin name for plugin-specific actions
     #[serde(default)]
     pub target: Option<String>,
+    /// Workflow ID for execute-workflow action
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    /// User input / task description for execute-workflow action
+    #[serde(default)]
+    pub input: Option<String>,
 }
 
 /// Execute a pack-level action.
@@ -20,8 +26,15 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
         "list-workflows" => to_json_string(list_workflows_value()),
         "list-plugins" => to_json_string(list_plugins_value()),
         "status" => to_json_string(pack_status_value()),
+        "execute-workflow" => {
+            let workflow_id = input.workflow_id.as_deref().ok_or_else(|| {
+                WitPluginError::invalid_input("execute-workflow requires 'workflow_id'")
+            })?;
+            let user_input = input.input.as_deref().unwrap_or("");
+            to_json_string(crate::executor::execute_workflow(workflow_id, user_input))
+        }
         other => Err(WitPluginError::not_found(format!(
-            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status",
+            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow",
             other
         ))),
     }
@@ -216,6 +229,8 @@ mod tests {
         let input = CodingPackInput {
             action: "validate-pack".to_string(),
             target: None,
+            workflow_id: None,
+            input: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -228,6 +243,8 @@ mod tests {
         let input = CodingPackInput {
             action: "validate-workflows".to_string(),
             target: None,
+            workflow_id: None,
+            input: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -240,6 +257,8 @@ mod tests {
         let input = CodingPackInput {
             action: "list-workflows".to_string(),
             target: None,
+            workflow_id: None,
+            input: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -252,6 +271,8 @@ mod tests {
         let input = CodingPackInput {
             action: "list-plugins".to_string(),
             target: None,
+            workflow_id: None,
+            input: None,
         };
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -263,6 +284,8 @@ mod tests {
         let input = CodingPackInput {
             action: "does-not-exist".to_string(),
             target: None,
+            workflow_id: None,
+            input: None,
         };
         let err = execute_action(&input).unwrap_err();
         assert_eq!(err.code, "not_found");

@@ -26,7 +26,7 @@ steps:
     config:
       model_tier: fast
       system_prompt: |
-        You are bmad/quick-flow-solo-dev. Create a minimal but complete tech spec:
+        You are bmad/quick-flow. Create a minimal but complete tech spec:
         - What to build (scope boundary)
         - Key implementation decisions
         - Files to create/modify
