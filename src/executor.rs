@@ -1,6 +1,6 @@
 use pulse_plugin_sdk::error::WitPluginError;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -63,6 +63,17 @@ pub(crate) struct StepConfigDef {
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub retry: Option<RetryConfig>,
+}
+
+/// Configuration for iterative fix loops.
+/// When a step has a retry config, the executor will re-run it
+/// (with test failure context) when the `on_failure_of` step fails.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct RetryConfig {
+    pub max_attempts: u32,
+    pub on_failure_of: String,
 }
 
 // ── Step execution results ─────────────────────────────────────────────────
@@ -112,7 +123,26 @@ pub fn execute_workflow(
 
     let mut failed_required = false;
 
-    for step_id in &execution_order {
+    // Build retry index: map from on_failure_of step -> (retryable step id, RetryConfig)
+    let retry_index: HashMap<String, (String, RetryConfig)> = workflow
+        .steps
+        .iter()
+        .filter_map(|s| {
+            s.config
+                .as_ref()
+                .and_then(|c| c.retry.as_ref())
+                .map(|r| (r.on_failure_of.clone(), (s.id.clone(), r.clone())))
+        })
+        .collect();
+
+    // Track retry state: step_id -> current attempt number
+    let mut retry_attempts: HashMap<String, u32> = HashMap::new();
+    // Track retry history for metadata: step_id -> vec of attempt summaries
+    let mut retry_history: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+
+    let mut idx = 0;
+    while idx < execution_order.len() {
+        let step_id = &execution_order[idx];
         let step = workflow.steps.iter().find(|s| s.id == *step_id).unwrap();
 
         // Skip remaining steps after a required step failure
@@ -127,6 +157,7 @@ pub fn execute_workflow(
                     error: Some("skipped: prior required step failed".to_string()),
                 },
             );
+            idx += 1;
             continue;
         }
 
@@ -143,6 +174,7 @@ pub fn execute_workflow(
             if !step.optional {
                 failed_required = true;
             }
+            idx += 1;
             continue;
         }
 
@@ -179,11 +211,68 @@ pub fn execute_workflow(
                                     verdict
                                 );
                                 output.status = StepStatus::Failed;
-                                output.error = Some(format!(
-                                    "review verdict: {} (commit blocked)",
-                                    verdict
-                                ));
+                                output.error =
+                                    Some(format!("review verdict: {} (commit blocked)", verdict));
                             }
+                        }
+                    }
+                }
+
+                // Retry loop: if this step failed and it's the on_failure_of target for a retryable step
+                if output.status == StepStatus::Failed {
+                    if let Some((retryable_step_id, retry_cfg)) = retry_index.get(&step.id) {
+                        let attempt = retry_attempts.entry(retryable_step_id.clone()).or_insert(1);
+                        if *attempt < retry_cfg.max_attempts {
+                            *attempt += 1;
+                            let failure_context = output.error.as_deref().unwrap_or("");
+                            let test_output = output.content.as_deref().unwrap_or("");
+
+                            // Record attempt in retry history
+                            retry_history
+                                .entry(retryable_step_id.clone())
+                                .or_default()
+                                .push(serde_json::json!({
+                                    "attempt": *attempt - 1,
+                                    "status": "failed",
+                                    "failure_summary": &failure_context[..failure_context.len().min(500)],
+                                }));
+
+                            let retry_context = build_retry_context(
+                                *attempt,
+                                failure_context,
+                                test_output,
+                                retry_history.get(retryable_step_id),
+                            );
+                            template_vars.insert("retry_context".to_string(), retry_context);
+
+                            eprintln!(
+                                "[workflow]   retry: re-running '{}' (attempt {}/{})",
+                                retryable_step_id, *attempt, retry_cfg.max_attempts
+                            );
+
+                            // Find the retryable step's position in execution_order and restart from there
+                            if let Some(retry_idx) = execution_order
+                                .iter()
+                                .position(|id| id == retryable_step_id)
+                            {
+                                // Clear outputs for the retryable step and the failed test step
+                                outputs.remove(retryable_step_id);
+                                outputs.remove(&step.id);
+                                failed_required = false;
+                                idx = retry_idx;
+                                continue;
+                            }
+                        } else {
+                            // Retry limit reached
+                            eprintln!(
+                                "[workflow]   retry: limit reached for '{}' ({} attempts)",
+                                retryable_step_id, retry_cfg.max_attempts
+                            );
+                            output.error = Some(format!(
+                                "retry_limit_reached: {} attempts exhausted. Last error: {}",
+                                retry_cfg.max_attempts,
+                                output.error.as_deref().unwrap_or("unknown")
+                            ));
                         }
                     }
                 }
@@ -196,7 +285,24 @@ pub fn execute_workflow(
                     "[workflow]   → {:?} ({}ms)",
                     output.status, output.execution_time_ms
                 );
-                outputs.insert(step.id.clone(), output);
+
+                // Attach retry metadata if applicable
+                let step_output = if let Some(history) = retry_history.get(&step.id) {
+                    let mut enriched = output.clone();
+                    if let Some(content) = &enriched.content {
+                        let attempts = retry_attempts.get(&step.id).copied().unwrap_or(1);
+                        enriched.content = Some(format!(
+                            "{}\n\n<!-- retry_metadata: {{\"attempts\": {}, \"history\": {}}} -->",
+                            content,
+                            attempts,
+                            serde_json::to_string(history).unwrap_or_default()
+                        ));
+                    }
+                    enriched
+                } else {
+                    output
+                };
+                outputs.insert(step.id.clone(), step_output);
             }
             Err(e) => {
                 eprintln!("[workflow]   → error: {}", e.message);
@@ -213,6 +319,8 @@ pub fn execute_workflow(
                 outputs.insert(step.id.clone(), output);
             }
         }
+
+        idx += 1;
     }
 
     // 5. Build result
@@ -267,16 +375,11 @@ pub fn execute_workflow(
 
 fn load_workflow(path: &Path) -> Result<WorkflowDef, WitPluginError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        WitPluginError::not_found(format!(
-            "workflow not found: {}: {}",
-            path.display(),
-            e
-        ))
+        WitPluginError::not_found(format!("workflow not found: {}: {}", path.display(), e))
     })?;
 
-    serde_yaml::from_str(&content).map_err(|e| {
-        WitPluginError::invalid_input(format!("invalid workflow YAML: {}", e))
-    })
+    serde_yaml::from_str(&content)
+        .map_err(|e| WitPluginError::invalid_input(format!("invalid workflow YAML: {}", e)))
 }
 
 // ── Plugin availability ────────────────────────────────────────────────────
@@ -299,7 +402,15 @@ fn check_required_plugins(workflow: &WorkflowDef) -> Result<(), WitPluginError> 
 
 // ── Topological sort (Kahn's algorithm) ────────────────────────────────────
 
+/// Returns a flat ordering for sequential execution.
 fn topological_sort(steps: &[StepDef]) -> Result<Vec<String>, WitPluginError> {
+    let levels = topological_sort_levels(steps)?;
+    Ok(levels.into_iter().flatten().collect())
+}
+
+/// Returns steps grouped by dependency level for parallel execution.
+/// Each inner Vec contains steps that can run concurrently.
+fn topological_sort_levels(steps: &[StepDef]) -> Result<Vec<Vec<String>>, WitPluginError> {
     let mut in_degree: HashMap<&str, usize> = HashMap::new();
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
 
@@ -312,43 +423,48 @@ fn topological_sort(steps: &[StepDef]) -> Result<Vec<String>, WitPluginError> {
         }
     }
 
-    // Seed queue with zero-degree nodes, sorted for determinism
-    let mut queue: VecDeque<&str> = {
-        let mut roots: Vec<&str> = in_degree
-            .iter()
-            .filter(|(_, &deg)| deg == 0)
-            .map(|(&id, _)| id)
-            .collect();
-        roots.sort();
-        roots.into_iter().collect()
-    };
+    let mut levels: Vec<Vec<String>> = Vec::new();
+    let mut total_processed = 0;
 
-    let mut result = Vec::new();
+    // Seed with zero-degree nodes
+    let mut current_level: Vec<&str> = in_degree
+        .iter()
+        .filter(|(_, &deg)| deg == 0)
+        .map(|(&id, _)| id)
+        .collect();
+    current_level.sort(); // deterministic ordering
 
-    while let Some(node) = queue.pop_front() {
-        result.push(node.to_string());
-        if let Some(neighbors) = adj.get(node) {
-            let mut next_ready: Vec<&str> = Vec::new();
-            for &neighbor in neighbors {
-                if let Some(deg) = in_degree.get_mut(neighbor) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        next_ready.push(neighbor);
+    while !current_level.is_empty() {
+        let level: Vec<String> = current_level.iter().map(|s| s.to_string()).collect();
+        total_processed += level.len();
+
+        // Find next level: reduce in-degree for neighbors
+        let mut next_level: Vec<&str> = Vec::new();
+        for &node in &current_level {
+            if let Some(neighbors) = adj.get(node) {
+                for &neighbor in neighbors {
+                    if let Some(deg) = in_degree.get_mut(neighbor) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            next_level.push(neighbor);
+                        }
                     }
                 }
             }
-            next_ready.sort();
-            queue.extend(next_ready);
         }
+        next_level.sort();
+
+        levels.push(level);
+        current_level = next_level;
     }
 
-    if result.len() != steps.len() {
+    if total_processed != steps.len() {
         return Err(WitPluginError::invalid_input(
             "workflow DAG contains a cycle",
         ));
     }
 
-    Ok(result)
+    Ok(levels)
 }
 
 // ── Dependency checking ────────────────────────────────────────────────────
@@ -423,6 +539,26 @@ fn is_review_step(step: &StepDef) -> bool {
     lower.contains("review") || lower.contains("qa")
 }
 
+// ── PR fields extraction (for auto-generated PRs) ─────────────────────────
+
+/// Extract PR title (first line, max 72 chars) and body (rest) from agent output.
+/// Used by workflow templates when generating PR content from agent output.
+pub fn extract_pr_fields(content: &str) -> (String, String) {
+    let parts: Vec<&str> = content.splitn(2, "\n\n").collect();
+    let title = parts[0].trim();
+    let title = if title.len() > 72 {
+        format!("{}...", &title[..69])
+    } else {
+        title.to_string()
+    };
+    let body = if parts.len() > 1 {
+        parts[1].trim().to_string()
+    } else {
+        String::new()
+    };
+    (title, body)
+}
+
 // ── Branch name extraction ─────────────────────────────────────────────────
 
 fn extract_branch_name(content: &str) -> Option<String> {
@@ -436,6 +572,71 @@ fn extract_branch_name(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ── Retry context builder (progressive enrichment) ─────────────────────────
+
+/// Build enriched context for retry attempts, including prior failure details.
+fn build_retry_context(
+    attempt: u32,
+    failure_error: &str,
+    test_output: &str,
+    history: Option<&Vec<serde_json::Value>>,
+) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("## Retry Attempt {} — Fix Required", attempt));
+
+    if !failure_error.is_empty() {
+        parts.push(format!(
+            "### Failure Details\n{}",
+            &failure_error[..failure_error.len().min(2000)]
+        ));
+    }
+
+    if !test_output.is_empty() {
+        parts.push(format!(
+            "### Test Output\n```\n{}\n```",
+            &test_output[..test_output.len().min(2000)]
+        ));
+    }
+
+    if attempt == 2 {
+        parts.push(
+            "### Instructions\nYour previous implementation failed the tests above. \
+             Fix the issues while preserving working functionality."
+                .to_string(),
+        );
+    } else if attempt >= 3 {
+        if let Some(hist) = history {
+            let recurring: Vec<String> = hist
+                .iter()
+                .filter_map(|h| {
+                    h.get("failure_summary")
+                        .and_then(|s| s.as_str())
+                        .map(String::from)
+                })
+                .collect();
+            if !recurring.is_empty() {
+                parts.push(format!(
+                    "### Failure Pattern Analysis\nRecurring failures across {} attempts:\n{}",
+                    hist.len(),
+                    recurring
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| format!("  Attempt {}: {}", i + 1, f))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ));
+            }
+        }
+        parts.push(
+            "### Instructions\nMultiple attempts have failed. Carefully analyze all prior failures \
+             and take a different approach if the same issues recur."
+                .to_string(),
+        );
+    }
+
+    parts.join("\n\n")
 }
 
 // ── Context assembly from prior steps ──────────────────────────────────────
@@ -476,8 +677,7 @@ fn execute_step(
 
     match step.step_type.as_str() {
         "agent" => execute_agent_step(step, outputs, template_vars, timeout_secs),
-        "function" => execute_function_step(step, template_vars, timeout_secs)
-            .map(|o| (o, None)),
+        "function" => execute_function_step(step, template_vars, timeout_secs).map(|o| (o, None)),
         other => Err(WitPluginError::invalid_input(format!(
             "step '{}': unknown step type '{}'",
             step.id, other
@@ -510,10 +710,7 @@ fn execute_agent_step(
     })?;
 
     let config = step.config.as_ref().ok_or_else(|| {
-        WitPluginError::invalid_input(format!(
-            "step '{}': agent step requires 'config'",
-            step.id
-        ))
+        WitPluginError::invalid_input(format!("step '{}': agent step requires 'config'", step.id))
     })?;
 
     // Build the prompt with context injection
@@ -522,12 +719,7 @@ fn execute_agent_step(
         .user_prompt_template
         .as_deref()
         .map(|t| substitute_templates(t, template_vars))
-        .unwrap_or_else(|| {
-            template_vars
-                .get("input")
-                .cloned()
-                .unwrap_or_default()
-        });
+        .unwrap_or_else(|| template_vars.get("input").cloned().unwrap_or_default());
 
     let full_prompt = if context.is_empty() {
         user_prompt
@@ -539,9 +731,24 @@ fn execute_agent_step(
     };
 
     if executor == "bmad-method" {
-        execute_bmad_agent_step(step, &full_prompt, config, template_vars, timeout_secs, start)
+        execute_bmad_agent_step(
+            step,
+            &full_prompt,
+            config,
+            template_vars,
+            timeout_secs,
+            start,
+        )
     } else {
-        execute_direct_agent_step(step, executor, &full_prompt, config, template_vars, timeout_secs, start)
+        execute_direct_agent_step(
+            step,
+            executor,
+            &full_prompt,
+            config,
+            template_vars,
+            timeout_secs,
+            start,
+        )
     }
 }
 
@@ -753,10 +960,8 @@ fn extract_agent_name(config: &StepConfigDef) -> String {
             sp.split_whitespace()
                 .find(|w| w.starts_with("bmad/"))
                 .map(|w| {
-                    w.trim_end_matches(|c: char| {
-                        !c.is_alphanumeric() && c != '/' && c != '-'
-                    })
-                    .to_string()
+                    w.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '-')
+                        .to_string()
                 })
         })
         .unwrap_or_else(|| "bmad/architect".to_string())
@@ -831,10 +1036,7 @@ fn parse_claude_response(
 
     // provider-claude-code returns content as a JSON string:
     // {"result": "actual text", "session_id": "...", "total_cost_usd": 0.01}
-    let content_str = result
-        .get("content")
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
+    let content_str = result.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
     // Try to parse the inner JSON to extract actual result text and session_id
     let (actual_content, session_id) =
@@ -1024,9 +1226,10 @@ fn spawn_plugin_rpc(
 
     // Write JSON-RPC request to stdin then close it
     {
-        let stdin = child.stdin.as_mut().ok_or_else(|| {
-            WitPluginError::internal("failed to open stdin for plugin")
-        })?;
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| WitPluginError::internal("failed to open stdin for plugin"))?;
         serde_json::to_writer(&mut *stdin, request)
             .map_err(|e| WitPluginError::internal(format!("failed to write RPC request: {}", e)))?;
         writeln!(stdin)
@@ -1054,9 +1257,10 @@ fn spawn_plugin_rpc(
     });
 
     // Read stdout for JSON-RPC response
-    let stdout = child.stdout.take().ok_or_else(|| {
-        WitPluginError::internal("failed to open stdout for plugin")
-    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| WitPluginError::internal("failed to open stdout for plugin"))?;
     let reader = BufReader::new(stdout);
 
     let mut response: Option<serde_json::Value> = None;
@@ -1088,9 +1292,7 @@ fn spawn_plugin_rpc(
         return Err(WitPluginError::internal("plugin execution timed out"));
     }
 
-    response.ok_or_else(|| {
-        WitPluginError::internal("plugin returned no JSON-RPC response")
-    })
+    response.ok_or_else(|| WitPluginError::internal("plugin returned no JSON-RPC response"))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1126,19 +1328,13 @@ mod tests {
     #[test]
     fn substitute_templates_no_match_unchanged() {
         let vars = HashMap::new();
-        assert_eq!(
-            substitute_templates("no vars here", &vars),
-            "no vars here"
-        );
+        assert_eq!(substitute_templates("no vars here", &vars), "no vars here");
     }
 
     #[test]
     fn substitute_templates_unresolved_var_left_as_is() {
         let vars = HashMap::new();
-        assert_eq!(
-            substitute_templates("{{unknown}}", &vars),
-            "{{unknown}}"
-        );
+        assert_eq!(substitute_templates("{{unknown}}", &vars), "{{unknown}}");
     }
 
     // ── extract_branch_name ────────────────────────────────────────────
@@ -1152,10 +1348,7 @@ mod tests {
     #[test]
     fn extract_branch_name_quoted() {
         let content = "branch_name: \"my-feature\"";
-        assert_eq!(
-            extract_branch_name(content),
-            Some("my-feature".to_string())
-        );
+        assert_eq!(extract_branch_name(content), Some("my-feature".to_string()));
     }
 
     #[test]
@@ -1228,6 +1421,66 @@ mod tests {
     fn topological_sort_cycle_detected() {
         let steps = vec![make_step("a", &["b"]), make_step("b", &["a"])];
         assert!(topological_sort(&steps).is_err());
+    }
+
+    // ── topological_sort_levels (parallel execution) ─────────────────
+
+    #[test]
+    fn topological_sort_levels_linear() {
+        let steps = vec![
+            make_step("a", &[]),
+            make_step("b", &["a"]),
+            make_step("c", &["b"]),
+        ];
+        let levels = topological_sort_levels(&steps).unwrap();
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[0], vec!["a"]);
+        assert_eq!(levels[1], vec!["b"]);
+        assert_eq!(levels[2], vec!["c"]);
+    }
+
+    #[test]
+    fn topological_sort_levels_parallel_roots() {
+        let steps = vec![
+            make_step("a", &[]),
+            make_step("b", &[]),
+            make_step("c", &["a", "b"]),
+        ];
+        let levels = topological_sort_levels(&steps).unwrap();
+        assert_eq!(levels.len(), 2);
+        assert_eq!(levels[0], vec!["a", "b"]); // parallel level
+        assert_eq!(levels[1], vec!["c"]);
+    }
+
+    #[test]
+    fn topological_sort_levels_diamond() {
+        let steps = vec![
+            make_step("a", &[]),
+            make_step("b", &["a"]),
+            make_step("c", &["a"]),
+            make_step("d", &["b", "c"]),
+        ];
+        let levels = topological_sort_levels(&steps).unwrap();
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[0], vec!["a"]);
+        assert_eq!(levels[1], vec!["b", "c"]); // parallel level
+        assert_eq!(levels[2], vec!["d"]);
+    }
+
+    #[test]
+    fn topological_sort_levels_review_parallel() {
+        // Simulates coding-review: two reviews depend on same step
+        let steps = vec![
+            make_step("implement", &[]),
+            make_step("adversarial_review", &["implement"]),
+            make_step("edge_case_review", &["implement"]),
+            make_step("synthesis", &["adversarial_review", "edge_case_review"]),
+        ];
+        let levels = topological_sort_levels(&steps).unwrap();
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[0], vec!["implement"]);
+        assert_eq!(levels[1], vec!["adversarial_review", "edge_case_review"]);
+        assert_eq!(levels[2], vec!["synthesis"]);
     }
 
     // ── dependencies_satisfied ─────────────────────────────────────────
@@ -1305,6 +1558,7 @@ mod tests {
             max_tokens: None,
             timeout_seconds: None,
             command: None,
+            retry: None,
         });
 
         let mut outputs = HashMap::new();
@@ -1428,6 +1682,7 @@ mod tests {
             context_from: None,
             timeout_seconds: None,
             command: None,
+            retry: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/architect");
     }
@@ -1442,6 +1697,7 @@ mod tests {
             context_from: None,
             timeout_seconds: None,
             command: None,
+            retry: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/architect");
     }
@@ -1456,6 +1712,7 @@ mod tests {
             context_from: None,
             timeout_seconds: None,
             command: None,
+            retry: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/qa");
     }
@@ -1515,6 +1772,7 @@ mod tests {
             context_from: None,
             timeout_seconds: None,
             command: None,
+            retry: None,
         });
         assert!(is_review_step(&step));
     }
@@ -1531,6 +1789,7 @@ mod tests {
             context_from: None,
             timeout_seconds: None,
             command: None,
+            retry: None,
         });
         assert!(!is_review_step(&step));
     }
@@ -1539,5 +1798,88 @@ mod tests {
     fn is_review_step_false_for_function() {
         let step = make_step("git_commit", &[]);
         assert!(!is_review_step(&step));
+    }
+
+    // ── build_retry_context ──────────────────────────────────────────
+
+    #[test]
+    fn build_retry_context_attempt_2() {
+        let ctx = build_retry_context(2, "exit code 1: test failed", "FAILED test_add", None);
+        assert!(ctx.contains("Retry Attempt 2"));
+        assert!(ctx.contains("Fix the issues while preserving"));
+        assert!(ctx.contains("exit code 1"));
+        assert!(ctx.contains("FAILED test_add"));
+    }
+
+    #[test]
+    fn build_retry_context_attempt_3_with_history() {
+        let history = vec![
+            serde_json::json!({"attempt": 1, "status": "failed", "failure_summary": "test_add failed"}),
+            serde_json::json!({"attempt": 2, "status": "failed", "failure_summary": "test_add still failing"}),
+        ];
+        let ctx = build_retry_context(3, "exit code 1", "FAILED", Some(&history));
+        assert!(ctx.contains("Retry Attempt 3"));
+        assert!(ctx.contains("Failure Pattern Analysis"));
+        assert!(ctx.contains("different approach"));
+    }
+
+    #[test]
+    fn build_retry_context_truncates_long_output() {
+        let long_output = "x".repeat(5000);
+        let ctx = build_retry_context(2, &long_output, &long_output, None);
+        // Should not contain the full 5000 chars — truncated to 2000
+        assert!(ctx.len() < 10000);
+    }
+
+    // ── RetryConfig deserialization ──────────────────────────────────
+
+    #[test]
+    fn retry_config_deserializes_from_yaml() {
+        let yaml = r#"
+            system_prompt: "test"
+            retry:
+              max_attempts: 3
+              on_failure_of: "run_tests"
+        "#;
+        let config: StepConfigDef = serde_yaml::from_str(yaml).unwrap();
+        let retry = config.retry.unwrap();
+        assert_eq!(retry.max_attempts, 3);
+        assert_eq!(retry.on_failure_of, "run_tests");
+    }
+
+    #[test]
+    fn retry_config_absent_is_none() {
+        let yaml = r#"
+            system_prompt: "test"
+        "#;
+        let config: StepConfigDef = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.retry.is_none());
+    }
+
+    // ── extract_pr_fields (Story 9.2) ────────────────────────────────
+
+    #[test]
+    fn extract_pr_fields_parses_title_and_body() {
+        let output = "feat: Add user authentication\n\n## Summary\nAdded login and registration.\n\n## Changes\n- auth.rs\n- login.rs";
+        let (title, body) = extract_pr_fields(output);
+        assert_eq!(title, "feat: Add user authentication");
+        assert!(body.contains("## Summary"));
+        assert!(body.contains("auth.rs"));
+    }
+
+    #[test]
+    fn extract_pr_fields_single_line() {
+        let output = "fix: resolve crash on startup";
+        let (title, body) = extract_pr_fields(output);
+        assert_eq!(title, "fix: resolve crash on startup");
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn extract_pr_fields_truncates_long_title() {
+        let long_title = "feat: ".to_string() + &"x".repeat(100);
+        let output = format!("{}\n\nbody here", long_title);
+        let (title, _body) = extract_pr_fields(&output);
+        assert!(title.len() <= 72);
     }
 }

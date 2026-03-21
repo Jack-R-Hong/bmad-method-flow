@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 
 use plugin_coding_pack::CodingPackPlugin;
-use pulse_plugin_sdk::wit_traits::{
-    DashboardExtensionPlugin, PluginLifecycle, StepExecutorPlugin,
-};
+use pulse_plugin_sdk::wit_traits::{DashboardExtensionPlugin, PluginLifecycle, StepExecutorPlugin};
 use pulse_plugin_sdk::wit_types::{StepConfig, TaskInput};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,9 +68,8 @@ fn dispatch_combined(
         }
         "dashboard-extension.get-display-customizations-json" => {
             let json_str = plugin.get_display_customizations_json();
-            serde_json::from_str(&json_str).map_err(|e| {
-                DispatchError::Internal(format!("invalid customizations JSON: {e}"))
-            })
+            serde_json::from_str(&json_str)
+                .map_err(|e| DispatchError::Internal(format!("invalid customizations JSON: {e}")))
         }
 
         _ => Err(DispatchError::MethodNotFound(format!(

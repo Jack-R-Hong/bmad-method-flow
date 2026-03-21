@@ -169,10 +169,7 @@ pub fn validate_workflow_file(path: &Path) -> Result<ValidationResult, String> {
     }
 
     // Validate depends_on DAG: check references exist and detect cycles
-    let step_ids: HashSet<String> = steps
-        .iter()
-        .filter_map(|s| s.id.clone())
-        .collect();
+    let step_ids: HashSet<String> = steps.iter().filter_map(|s| s.id.clone()).collect();
 
     let mut adj: HashMap<String, Vec<String>> = HashMap::new();
     for step in steps {
@@ -371,7 +368,10 @@ mod tests {
 
         let result = validate_workflow_file(&path).unwrap();
         assert!(!result.valid);
-        assert!(result.issues.iter().any(|i| i.contains("depends_on") && i.contains("nonexistent")));
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.contains("depends_on") && i.contains("nonexistent")));
     }
 
     #[test]
@@ -403,7 +403,10 @@ mod tests {
 
         let result = validate_workflow_file(&path).unwrap();
         assert!(!result.valid);
-        assert!(result.issues.iter().any(|i| i.contains("context_from") && i.contains("ghost")));
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.contains("context_from") && i.contains("ghost")));
     }
 
     #[test]

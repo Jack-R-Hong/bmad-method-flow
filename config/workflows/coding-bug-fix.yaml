@@ -50,11 +50,22 @@ steps:
       max_tokens: 4096
       context_from: [analyze_bug]
       timeout_seconds: 600
+      retry:
+        max_attempts: 2
+        on_failure_of: run_tests
+
+  # Step 2b: Run tests
+  - id: run_tests
+    type: function
+    depends_on: [implement_fix]
+    config:
+      command: ["bash", "-c", "cargo test 2>&1 || npm test 2>&1 || echo 'no test runner found'"]
+      timeout_seconds: 120
 
   # Step 3: QA edge case review
   - id: edge_case_review
     type: agent
-    depends_on: [implement_fix]
+    depends_on: [run_tests]
     executor: bmad-method
     config:
       model_tier: balanced
@@ -95,3 +106,22 @@ steps:
     config:
       command: ["plugin-memory", "reindex", "."]
       timeout_seconds: 120
+
+  # Step 7: Push branch to remote
+  - id: git_push
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-git-ops
+    config:
+      command: ["plugin-git-pr", "push"]
+      timeout_seconds: 30
+
+  # Step 8: Create pull request
+  - id: create_pr
+    type: function
+    depends_on: [git_push]
+    executor: plugin-git-ops
+    optional: true
+    config:
+      command: ["plugin-git-pr", "create-pr", "fix: {{input}}"]
+      timeout_seconds: 30

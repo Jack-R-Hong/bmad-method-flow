@@ -82,12 +82,7 @@ fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .and_then(|ext| ext.to_str())
-                            == Some("yaml")
-                    })
+                    .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
                     .count()
             })
             .unwrap_or(0)
@@ -120,12 +115,7 @@ fn validate_workflows_value() -> Result<serde_json::Value, WitPluginError> {
     let mut entries: Vec<_> = std::fs::read_dir(workflow_dir)
         .map_err(|e| WitPluginError::internal(format!("cannot read workflows dir: {}", e)))?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|ext| ext.to_str())
-                == Some("yaml")
-        })
+        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
         .collect();
     entries.sort_by_key(|e| e.file_name());
 

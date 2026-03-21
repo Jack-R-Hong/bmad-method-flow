@@ -68,6 +68,18 @@ FR50: System maps git diff to affected processes with risk assessment via `plugi
 FR51: System re-indexes the codebase after each commit when `auto_reindex: true` is configured
 FR52: All memory steps in coding workflows are optional — workflows execute correctly when `memory.provider: none` or plugin-memory is absent
 FR53: System provides a standalone `coding-memory-index` workflow for initial codebase indexing
+FR54: System parses structured test output (cargo test, npm test, pytest, JUnit XML) into per-test pass/fail results with file, line, and assertion details
+FR55: System identifies specific failing test names, locations, and error messages from raw test runner output
+FR56: System provides structured test results to downstream steps via `context_from` for targeted fix guidance
+FR57: System retries failed implementation steps with test failure context injected into the retry prompt
+FR58: System enforces bounded retry count (configurable, default 3) for iterative fix loops
+FR59: System tracks retry attempt number and includes prior attempt failures in progressive context enrichment
+FR60: System exits retry loop when all tests pass OR retry limit is reached, reporting final status
+FR61: System extends coding workflow templates to include push and PR creation as final pipeline steps
+FR62: System auto-generates PR title and body from workflow context (task description, changes made, test results)
+FR63: System executes independent DAG steps concurrently when no dependency edges exist between them
+FR64: System manages a thread pool for concurrent CLI process execution with configurable concurrency limit
+FR65: System provides E2E integration test harness that validates full workflow execution (submit → plan → implement → test → review → commit → PR)
 
 ### NonFunctional Requirements
 
@@ -169,6 +181,18 @@ FR50: Epic 6 — Git diff → affected processes risk mapping
 FR51: Epic 6 — Auto re-index after commit
 FR52: Epic 6 — Optional memory steps (graceful degradation)
 FR53: Epic 6 — Standalone memory-index workflow
+FR54: Epic 7 — Multi-format test output parsing (cargo test, npm test, pytest, JUnit XML)
+FR55: Epic 7 — Failing test identification with file, line, assertion details
+FR56: Epic 7 — Structured test results via context_from for downstream steps
+FR57: Epic 8 — Retry failed implementation with test failure context
+FR58: Epic 8 — Bounded retry count (configurable, default 3)
+FR59: Epic 8 — Progressive context enrichment across retry attempts
+FR60: Epic 8 — Retry loop exit conditions (all pass OR limit reached)
+FR61: Epic 9 — Push + PR creation steps in coding workflow templates
+FR62: Epic 9 — Auto-generated PR title/body from workflow context
+FR63: Epic 10 — Concurrent independent step execution in DAG
+FR64: Epic 10 — Thread pool for parallel CLI processes
+FR65: Epic 11 — E2E integration test harness for full workflow validation
 
 ## Epic List
 
@@ -209,6 +233,36 @@ After this epic, platform admins monitor plugin health, task step progression, s
 After this epic, all coding workflows leverage a configurable knowledge graph backend (GitNexus, Greptile, or none) to provide codebase-aware context before implementation, blast radius / risk assessment before commit, and automatic re-indexing after commit — so that AI agents make changes with full understanding of call chains, dependencies, and impact scope.
 
 **FRs covered:** FR46, FR47, FR48, FR49, FR50, FR51, FR52, FR53
+
+### Epic 7: Structured Test Result Parsing (test-parser)
+
+After this epic, the system parses raw test runner output into structured per-test results — identifying exactly which tests failed, where, and why — so that downstream retry and review steps receive precise, actionable failure context instead of raw stdout dumps.
+
+**FRs covered:** FR54, FR55, FR56
+
+### Epic 8: Iterative Fix Loops
+
+After this epic, when tests fail during an auto-dev workflow, the system automatically retries implementation with the specific failure context — progressively refining the code until tests pass or the retry limit is reached, enabling self-correcting autonomous development.
+
+**FRs covered:** FR57, FR58, FR59, FR60
+
+### Epic 9: Automated PR Pipeline
+
+After this epic, coding workflows produce a complete, ready-to-review pull request as their final output — pushed to a branch with auto-generated title/body — so that the developer's only action is clicking "Merge."
+
+**FRs covered:** FR61, FR62, FR21, FR22, FR23, FR25
+
+### Epic 10: Parallel Step Execution
+
+After this epic, independent workflow steps (e.g., adversarial review + edge-case review) execute concurrently instead of sequentially — reducing total workflow execution time by up to 40% for pipelines with parallel branches.
+
+**FRs covered:** FR7, FR63, FR64
+
+### Epic 11: E2E Integration Testing & Validation
+
+After this epic, a comprehensive integration test harness validates the full auto-dev cycle against a real codebase — from submission through PR creation — providing confidence that the system works end-to-end in production.
+
+**FRs covered:** FR65
 
 ---
 
@@ -934,3 +988,498 @@ So that I can bootstrap the knowledge graph and install it as part of the coding
 **Given** `pulse run coding-memory-index` is executed
 **When** the indexing completes
 **Then** subsequent coding workflows can leverage `memory_context`, `memory_impact`, and `memory_detect_changes` steps
+
+---
+
+## Epic 7: Structured Test Result Parsing (test-parser)
+
+After this epic, the system parses raw test runner output into structured per-test results — identifying exactly which tests failed, where, and why — so that downstream retry and review steps receive precise, actionable failure context instead of raw stdout dumps.
+
+### Story 7.1: WASM Crate Setup & Multi-Format Parser Core
+
+As a workflow engine,
+I want a test-parser WASM plugin that parses cargo test output into structured per-test results,
+So that downstream steps receive machine-parseable test data instead of raw stdout.
+
+**Acceptance Criteria:**
+
+**Given** the crate `pulse-plugins/test-parser/` does not exist
+**When** this story is implemented
+**Then** a Rust crate exists with `Cargo.toml`, `lib.rs`, `config.rs`, `parser.rs`, `wit/` directory
+**And** `lib.rs` uses `wit_bindgen::generate!` to implement the `step-executor-plugin` world
+**And** `Cargo.toml` targets `wasm32-wasip2`
+
+**Given** raw cargo test output is provided as input
+**When** the parser processes it
+**Then** it returns structured JSON with `total`, `passed`, `failed`, `skipped` counts
+**And** each failing test includes `test_name`, `file_path`, `line_number` (if available), `assertion_message`, and `stdout` capture
+**And** parsing completes within 50ms (NFR3)
+
+**Given** a `TestParserConfig` struct exists with `#[serde(deny_unknown_fields)]`
+**When** step config specifies `framework: "cargo-test"`
+**Then** the parser uses the cargo test output format
+**And** unknown `framework` values return `PluginError::configuration` with supported list
+
+### Story 7.2: Additional Framework Parsers (npm test, pytest, JUnit XML)
+
+As a workflow designer,
+I want test-parser to support npm test (Jest/Mocha), pytest, and JUnit XML output formats,
+So that auto-dev workflows work across polyglot codebases.
+
+**Acceptance Criteria:**
+
+**Given** raw Jest/Mocha output is provided with `framework: "jest"`
+**When** the parser processes it
+**Then** it returns structured results with `test_name`, `suite_name`, `error_message`, and `stack_trace` per failure
+**And** `PASS`/`FAIL` summary lines are correctly parsed
+
+**Given** raw pytest output is provided with `framework: "pytest"`
+**When** the parser processes it
+**Then** it returns structured results with `test_name`, `file_path::function_name`, `assertion_message`, and `short_test_summary`
+
+**Given** JUnit XML input is provided with `framework: "junit-xml"`
+**When** the parser processes it
+**Then** it parses `<testcase>` elements, extracting `name`, `classname`, `time`, and `<failure>` message/type
+**And** this serves as a universal fallback since many runners can produce JUnit XML
+
+**Given** the test output doesn't match the expected format
+**When** parsing fails gracefully
+**Then** raw output is preserved in a fallback structured result with `format_detected: false`
+**And** downstream steps still receive usable (raw) context
+
+### Story 7.3: Workflow Integration & context_from Output Contract
+
+As a workflow engine,
+I want test-parser output to flow seamlessly into downstream steps via `context_from`,
+So that review and retry steps receive structured failure data.
+
+**Acceptance Criteria:**
+
+**Given** a test-parser step completes with failures
+**When** a downstream step specifies `context_from: ["run-tests"]`
+**Then** it receives structured JSON including: `summary` (counts), `failures` (array of detailed test failures), `raw_output` (original stdout)
+**And** `StepOutput.metadata` contains `plugin_name: "test-parser"`, `plugin_version`, `framework`, `tests_passed`, `tests_failed`, `tests_skipped`
+
+**Given** a test-parser step completes with all tests passing
+**When** the output is constructed
+**Then** `failures` array is empty, `status: Success`
+**And** `tests_failed: 0` in metadata
+
+**Given** the existing `run-tests` function steps in workflow YAMLs
+**When** this story is complete
+**Then** a `parse-tests` step can be chained after `run-tests` to add structured parsing
+**And** existing workflows continue to work without test-parser (backwards compatible)
+
+---
+
+## Epic 8: Iterative Fix Loops
+
+After this epic, when tests fail during an auto-dev workflow, the system automatically retries implementation with the specific failure context — progressively refining the code until tests pass or the retry limit is reached, enabling self-correcting autonomous development.
+
+### Story 8.1: Retry Loop Engine in Workflow Executor
+
+As a workflow engine,
+I want the executor to support a `retry` configuration on steps that re-executes the step with failure context when a downstream test step fails,
+So that the system can self-correct without human intervention.
+
+**Acceptance Criteria:**
+
+**Given** a workflow step has `retry: { max_attempts: 3, on_failure_of: "run-tests" }`
+**When** the `run-tests` step fails (non-zero exit code)
+**Then** the executor re-executes the retryable step (e.g., `implement`) with the test failure output injected as additional context
+**And** the retry count increments (attempt 2 of 3)
+**And** after re-implementation, `run-tests` is re-executed automatically
+
+**Given** the retry limit (e.g., 3) is reached and tests still fail
+**When** the final attempt completes
+**Then** the workflow marks the step as `Failed` with status `"retry_limit_reached"`
+**And** downstream steps (review, commit) are blocked
+**And** the final test output and all attempt summaries are included in the step output
+
+**Given** a retried implementation succeeds on attempt N (tests pass)
+**When** the retry loop exits
+**Then** the step is marked `Success` with `metadata.attempts: N`
+**And** downstream steps proceed normally
+
+**Given** no `retry` configuration exists on a step
+**When** a downstream test fails
+**Then** behavior is unchanged — the test step fails and downstream is blocked (backwards compatible)
+
+### Story 8.2: Progressive Context Enrichment
+
+As a workflow engine,
+I want each retry attempt to include progressively richer context — prior attempt's code changes, test failures, and error patterns,
+So that the AI agent learns from each failure and converges toward a working solution.
+
+**Acceptance Criteria:**
+
+**Given** retry attempt 2 begins after attempt 1 failed tests
+**When** the prompt is constructed
+**Then** it includes: original task description, attempt 1's implementation summary, attempt 1's specific test failures (from test-parser if available, raw output otherwise)
+**And** a directive: "Your previous implementation failed these tests. Fix the issues while preserving working functionality."
+
+**Given** retry attempt 3 begins after attempt 2 also failed
+**When** the prompt is constructed
+**Then** it includes: original task, attempt 1 failures, attempt 2 failures, and a pattern analysis noting recurring vs new failures
+**And** `metadata.retry_history` contains an array of `{ attempt, failures_count, new_failures, resolved_failures }`
+
+**Given** structured test results are available from test-parser (Epic 7)
+**When** retry context is assembled
+**Then** only the specific failing test names, files, and assertion messages are injected (not full raw output)
+**And** this produces a more focused retry prompt
+
+**Given** structured test results are NOT available (test-parser not installed)
+**When** retry context is assembled
+**Then** raw test stdout/stderr is injected as context (graceful degradation)
+
+### Story 8.3: Retry-Enabled Workflow Templates
+
+As a developer,
+I want the feature-dev, bug-fix, and story-dev workflow templates to include retry loops on implementation steps,
+So that auto-dev runs self-correct on test failures without requiring re-submission.
+
+**Acceptance Criteria:**
+
+**Given** `coding-feature-dev.yaml` is updated
+**When** the `implement` step is configured
+**Then** it includes `retry: { max_attempts: 3, on_failure_of: "run_tests" }`
+**And** the workflow DAG remains valid with retry edges
+
+**Given** `coding-bug-fix.yaml` is updated
+**When** the `implement_fix` step is configured
+**Then** it includes `retry: { max_attempts: 2, on_failure_of: "run_tests" }`
+**And** bug-fix uses fewer retries since the fix scope is narrower
+
+**Given** `coding-story-dev.yaml` is updated
+**When** the `implement` step is configured
+**Then** it includes `retry: { max_attempts: 3, on_failure_of: "run_tests" }`
+
+**Given** `coding-quick-dev.yaml` is updated
+**When** the `implement` step is configured
+**Then** it includes `retry: { max_attempts: 2, on_failure_of: "run_tests" }`
+
+**Given** any retry-enabled workflow runs and all retries exhaust
+**When** the workflow completes
+**Then** the execution output clearly shows: total attempts, which tests failed each time, and whether any progress was made (tests resolved across attempts)
+
+---
+
+## Epic 9: Automated PR Pipeline
+
+After this epic, coding workflows produce a complete, ready-to-review pull request as their final output — pushed to a branch with auto-generated title/body — so that the developer's only action is clicking "Merge."
+
+### Story 9.1: Push & PR Steps in git-ops Executor
+
+As a workflow engine,
+I want the in-plugin executor to support `push` and `create-pr` function steps that call git-ops operations,
+So that workflows can push branches and create PRs as automated pipeline steps.
+
+**Acceptance Criteria:**
+
+**Given** a function step specifies `command: ["plugin-git-ops", "push"]`
+**When** the executor runs it
+**Then** `git push -u origin {branch_name}` is executed in the workspace directory
+**And** on success, `StepOutput.metadata` contains `branch`, `remote: "origin"`, `pushed: true`
+**And** if the branch already has upstream tracking, `git push` runs without `-u`
+
+**Given** a function step specifies `command: ["plugin-git-ops", "create-pr"]` with template vars `{{pr_title}}` and `{{pr_body}}`
+**When** the executor runs on a GitHub repository
+**Then** a POST request is made to `https://api.github.com/repos/{owner}/{repo}/pulls`
+**And** the request includes `title`, `body`, `head` (current branch), `base` (default branch), `draft: false`
+**And** the GitHub token is read from `GITHUB_TOKEN` environment variable
+**And** `StepOutput.metadata` contains `pr_url`, `pr_number`, `platform: "github"`
+
+**Given** the git remote URL matches a GitLab pattern
+**When** `create-pr` is executed
+**Then** a POST request is made to `{gitlab_base_url}/api/v4/projects/{id}/merge_requests`
+**And** the token is read from `GITLAB_TOKEN` environment variable
+**And** self-hosted GitLab instances use `base_url` from config
+
+**Given** no platform token is available
+**When** PR creation is attempted
+**Then** the step fails with a clear error: "No {platform} token found. Set {ENV_VAR} environment variable."
+**And** the token name is never included in logs or output beyond the env var name
+
+### Story 9.2: Auto-Generated PR Title & Body
+
+As a developer,
+I want the system to auto-generate meaningful PR titles and bodies from workflow context,
+So that PRs are immediately reviewable without manual description writing.
+
+**Acceptance Criteria:**
+
+**Given** a workflow completes with context from plan, implement, test, and review steps
+**When** the PR creation step assembles the title
+**Then** the title is derived from the original task description, truncated to 72 characters
+**And** prefixed with the workflow type (e.g., `feat:`, `fix:`, `refactor:`)
+
+**Given** workflow step outputs are available via `context_from`
+**When** the PR body is assembled
+**Then** it includes sections:
+- **Summary:** condensed from the plan step output (what was done and why)
+- **Changes:** file list from git diff
+- **Test Results:** pass/fail summary from test step
+- **Review Notes:** key findings from review step (if verdict was `approve`)
+**And** the body is formatted in GitHub-flavored markdown
+**And** a footer notes `Generated by Pulse Auto-Dev`
+
+**Given** the implement step used retry loops (Epic 8)
+**When** the PR body is assembled
+**Then** it includes a note: "Implementation required {N} attempts" with brief summary of what was fixed across retries
+
+**Given** the plan step output is very long (>2000 chars)
+**When** the PR body is assembled
+**Then** the summary is truncated with "..." and a note to see the full plan in workflow logs
+
+### Story 9.3: PR Pipeline Integration in Coding Workflows
+
+As a developer,
+I want feature-dev, bug-fix, and story-dev workflows to automatically push and create PRs as their final steps,
+So that submitting a task produces a ready-to-review PR with zero manual git operations.
+
+**Acceptance Criteria:**
+
+**Given** `coding-feature-dev.yaml` is updated
+**When** the workflow is loaded
+**Then** after `git_commit`, three new steps exist:
+- `git_push` — function step calling `plugin-git-ops push`, `depends_on: [git_commit]`
+- `generate_pr_body` — agent step that synthesizes PR content from `context_from: [architect, implement, run_tests, qa_review]`
+- `create_pr` — function step calling `plugin-git-ops create-pr`, `depends_on: [git_push, generate_pr_body]`
+**And** `create_pr` is marked `optional: true` (PR creation should not fail the workflow if token is missing)
+
+**Given** `coding-bug-fix.yaml` is updated
+**When** the workflow is loaded
+**Then** equivalent push + PR steps exist after commit, with PR title prefix `fix:`
+
+**Given** `coding-story-dev.yaml` is updated
+**When** the workflow is loaded
+**Then** equivalent push + PR steps exist after commit
+
+**Given** `coding-quick-dev.yaml` is updated
+**When** the workflow is loaded
+**Then** push + PR steps are added but both marked `optional: true` (quick dev may not always need a PR)
+
+**Given** any workflow runs without a platform token configured
+**When** the `create_pr` step is reached
+**Then** it is skipped gracefully (marked `optional: true`)
+**And** the workflow still reports overall `Success` with a note: "PR creation skipped — no platform token configured"
+**And** the committed branch is still pushed and available for manual PR creation
+
+---
+
+## Epic 10: Parallel Step Execution
+
+After this epic, independent workflow steps (e.g., adversarial review + edge-case review) execute concurrently instead of sequentially — reducing total workflow execution time by up to 40% for pipelines with parallel branches.
+
+### Story 10.1: Concurrent Step Dispatcher
+
+As a workflow engine,
+I want the executor to identify independent steps at the same DAG level and execute them concurrently using a thread pool,
+So that workflows with parallel branches complete faster.
+
+**Acceptance Criteria:**
+
+**Given** a workflow DAG has steps A and B that both depend only on step C (no edge between A and B)
+**When** step C completes successfully
+**Then** steps A and B are dispatched concurrently, not sequentially
+**And** both steps' outputs are collected before any step depending on A or B is dispatched
+
+**Given** the executor's topological sort groups steps by dependency level
+**When** a level contains multiple steps with satisfied dependencies
+**Then** all steps in that level are spawned as concurrent tasks
+**And** the executor waits for all tasks in the level to complete before advancing to the next level
+
+**Given** a configurable concurrency limit exists (default: 4, configurable via `config/config.yaml` as `executor.max_parallel_steps`)
+**When** a level has more steps than the concurrency limit
+**Then** steps are dispatched in batches of `max_parallel_steps`
+**And** the next batch starts only after a slot frees up
+
+**Given** the executor uses `std::thread` (not async tokio) for process management
+**When** concurrent steps are dispatched
+**Then** each step runs in its own thread with its own `std::process::Command` child process
+**And** thread panics are caught and mapped to `StepStatus::Failed` without crashing the executor
+
+**Given** a workflow has no parallel branches (fully sequential DAG)
+**When** the executor runs
+**Then** behavior is identical to the current sequential executor (backwards compatible)
+
+### Story 10.2: Concurrent Output Collection & Context Assembly
+
+As a workflow engine,
+I want concurrent step outputs to be safely collected and made available via `context_from` to downstream steps,
+So that parallel execution doesn't break the context injection mechanism.
+
+**Acceptance Criteria:**
+
+**Given** steps A and B run concurrently and both complete
+**When** step D specifies `context_from: ["A", "B"]`
+**Then** it receives both outputs, regardless of which completed first
+**And** output ordering in the context is deterministic (alphabetical by step_id)
+
+**Given** step A succeeds but step B fails during concurrent execution
+**When** step D depends on both A and B
+**Then** step D is blocked (dependency not satisfied)
+**And** step A's output is still stored and available for any step that depends only on A
+
+**Given** concurrent steps both write to `template_vars` (e.g., `session_id`, `branch_name`)
+**When** outputs are merged
+**Then** thread-safe collection (e.g., `Arc<Mutex<HashMap>>`) prevents data races
+**And** if both steps produce `session_id`, the later-completing step's value wins with a `tracing::debug!` noting the override
+
+**Given** step A times out during concurrent execution
+**When** the timeout fires
+**Then** only step A's child process is killed (SIGTERM → SIGKILL)
+**And** step B continues executing unaffected
+**And** step A is marked `StepStatus::TimedOut`
+
+### Story 10.3: Parallel Review Workflow Optimization
+
+As a developer,
+I want the coding-review workflow's adversarial and edge-case review steps to execute in parallel,
+So that code reviews complete in half the time.
+
+**Acceptance Criteria:**
+
+**Given** `coding-review.yaml` has `adversarial_review` and `edge_case_review` steps
+**When** both steps depend only on `memory_context` (or have no shared dependencies beyond the input)
+**Then** the executor dispatches them concurrently
+**And** the final `synthesis` step waits for both reviews to complete before running
+
+**Given** `coding-feature-dev.yaml` has sequential steps that could be parallelized
+**When** the workflow DAG is analyzed
+**Then** `memory_context` and `architect` are identified as the only truly sequential pair
+**And** no additional parallelization is possible in the feature-dev pipeline (each step depends on the previous)
+
+**Given** a new workflow template `coding-parallel-review.yaml` is created
+**When** it defines 3 parallel review agents (adversarial, edge-case, security)
+**Then** all 3 run concurrently with `depends_on: [implement]`
+**And** a `review_synthesis` step with `depends_on: [adversarial_review, edge_case_review, security_review]` and `context_from` from all three produces a unified verdict
+
+**Given** the parallel executor is enabled
+**When** execution logs are reviewed
+**Then** concurrent steps show overlapping timestamps
+**And** `tracing::info!` logs include `parallel_batch: N` field indicating which concurrency batch each step belongs to
+
+---
+
+## Epic 11: E2E Integration Testing & Validation
+
+After this epic, a comprehensive integration test harness validates the full auto-dev cycle against a real codebase — from submission through PR creation — providing confidence that the system works end-to-end in production.
+
+### Story 11.1: Test Fixture Project & Harness Setup
+
+As a platform engineer,
+I want a sample Rust project as a test fixture and a test harness that can invoke the full workflow executor,
+So that E2E tests run against a realistic codebase with real git operations.
+
+**Acceptance Criteria:**
+
+**Given** the directory `tests/fixtures/sample-project/` does not exist
+**When** this story is implemented
+**Then** a minimal Rust project exists with:
+- `Cargo.toml` declaring a library crate
+- `src/lib.rs` with 2-3 simple functions and existing tests
+- `.git/` initialized as a valid git repository with at least one commit
+- A deliberately incomplete function (stub) that the auto-dev agent can implement
+
+**Given** a test harness module `tests/e2e/` exists
+**When** the harness is initialized for a test
+**Then** it creates a temporary git worktree from the fixture project
+**And** sets up the working directory, config, and plugin paths
+**And** provides helper functions: `submit_workflow(name, input)`, `assert_step_status(step_id, expected)`, `read_step_output(step_id)`
+
+**Given** the test harness invokes the workflow executor
+**When** a workflow runs
+**Then** it uses the real `execute_workflow()` function from `src/executor.rs`
+**And** plugin binaries are resolved from `config/plugins/`
+**And** the test captures the full execution result JSON
+
+**Given** the test completes (pass or fail)
+**When** cleanup runs
+**Then** the temporary worktree is deleted
+**And** no orphaned processes remain
+
+### Story 11.2: Happy Path E2E — Feature Dev Full Cycle
+
+As a platform engineer,
+I want an E2E test that validates the complete feature-dev workflow (plan → implement → test → review → commit),
+So that we have automated proof the full auto-dev loop works.
+
+**Acceptance Criteria:**
+
+**Given** the sample project fixture and test harness are ready
+**When** `submit_workflow("coding-feature-dev", {"input": "Add a function multiply(a, b) that returns a * b with unit tests"})` is called
+**Then** the workflow executes all steps in order: `memory_context` (skipped if no memory), `architect`, `implement`, `run_tests`, `qa_review`, `git_commit`
+
+**Given** the workflow completes successfully
+**When** the execution result is inspected
+**Then** `status: "completed"` at the workflow level
+**And** `architect` step produced a plan mentioning `multiply`
+**And** `implement` step modified `src/lib.rs` to add the function
+**And** `run_tests` step exited with code 0 (all tests pass, including new ones)
+**And** `qa_review` step produced `verdict: approve`
+**And** `git_commit` step created a commit with the changes
+
+**Given** the git history of the test worktree is inspected after the workflow
+**When** `git log --oneline -1` is run
+**Then** the most recent commit contains the implementation changes
+**And** the commit message includes `Co-authored-by: pulse-auto-dev`
+
+**Given** this E2E test is run in CI
+**When** the `claude` CLI is not available
+**Then** the test is marked `#[ignore]` with comment "Requires claude CLI and API key"
+**And** a CI-specific flag `PULSE_E2E_ENABLED=1` controls whether ignored tests run
+
+### Story 11.3: Failure Path E2E — Quality Gate Blocks Commit
+
+As a platform engineer,
+I want an E2E test that validates the quality gate blocks commits when tests fail or review rejects,
+So that we have automated proof the safety mechanisms work.
+
+**Acceptance Criteria:**
+
+**Given** the sample project fixture is modified to have a deliberately failing test
+**When** `submit_workflow("coding-quick-dev", {"input": "Add a function divide(a, b) that returns a / b"})` is called
+**Then** the `implement` step succeeds (agent writes code)
+**And** the `run_tests` step fails (the deliberate failing test triggers)
+
+**Given** the workflow has a quality gate
+**When** the `run_tests` step fails
+**Then** `git_commit` step is skipped (blocked by failed dependency)
+**And** the workflow status is `"failed"`
+**And** no commit was created in the worktree
+
+**Given** the sample project is configured to trigger a review rejection
+**When** a workflow runs with a review step that produces `verdict: request-changes`
+**Then** the `git_commit` step is blocked
+**And** the execution result includes the review findings in the step output
+
+**Given** both failure E2E tests run
+**When** the tests complete
+**Then** they verify: no accidental commits, no orphaned processes, worktree is clean after failure
+
+### Story 11.4: Retry Loop E2E Validation
+
+As a platform engineer,
+I want an E2E test that validates the iterative fix loop works end-to-end,
+So that we have automated proof that self-correction produces working code.
+
+**Acceptance Criteria:**
+
+**Given** the sample project fixture has a function stub and a test that will fail on naive implementation
+**When** `submit_workflow("coding-feature-dev", {"input": "Implement safe_divide(a, b) that returns Result<f64, String> — return Err for division by zero"})` is called with retry enabled
+**Then** if the first attempt misses the zero-check edge case, the retry loop catches it via test failure
+**And** the second attempt receives the failing test context and adds the zero-check
+**And** the workflow eventually succeeds (within max_attempts)
+
+**Given** the retry loop E2E test completes
+**When** the execution result is inspected
+**Then** `metadata.attempts` shows how many tries were needed
+**And** `retry_history` shows the progression from failure to success
+**And** the final commit contains the correct implementation
+
+**Given** this test may be flaky (LLM output is non-deterministic)
+**When** the test is configured
+**Then** it allows up to 3 attempts at the workflow level (test-level retry)
+**And** success on any attempt counts as a pass
+**And** `#[ignore]` with `PULSE_E2E_ENABLED=1` gate applies

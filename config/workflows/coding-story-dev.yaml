@@ -79,11 +79,22 @@ steps:
       max_tokens: 8192
       context_from: [prepare_story, technical_design]
       timeout_seconds: 600
+      retry:
+        max_attempts: 3
+        on_failure_of: run_tests
+
+  # Step 4b: Run tests
+  - id: run_tests
+    type: function
+    depends_on: [implement]
+    config:
+      command: ["bash", "-c", "cargo test 2>&1 || npm test 2>&1 || echo 'no test runner found'"]
+      timeout_seconds: 120
 
   # Step 5: QA review against acceptance criteria
   - id: qa_review
     type: agent
-    depends_on: [implement]
+    depends_on: [run_tests]
     executor: bmad-method
     config:
       model_tier: balanced
@@ -124,3 +135,22 @@ steps:
     config:
       command: ["plugin-memory", "reindex", "."]
       timeout_seconds: 120
+
+  # Step 9: Push branch to remote
+  - id: git_push
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-git-ops
+    config:
+      command: ["plugin-git-pr", "push"]
+      timeout_seconds: 30
+
+  # Step 10: Create pull request
+  - id: create_pr
+    type: function
+    depends_on: [git_push]
+    executor: plugin-git-ops
+    optional: true
+    config:
+      command: ["plugin-git-pr", "create-pr", "feat: {{input}}"]
+      timeout_seconds: 30

@@ -1,0 +1,99 @@
+name: coding-parallel-review
+version: 1
+description: "Parallel code review: 3 specialized review agents run concurrently, then synthesis"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-memory
+    optional: true
+steps:
+  # Step 0 (optional): Knowledge graph context
+  - id: memory_context
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "context", "{{input}}"]
+      timeout_seconds: 60
+
+  # Step 1: Adversarial review (parallel)
+  - id: adversarial_review
+    type: agent
+    depends_on: [memory_context]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa. Perform a cynical adversarial review.
+        Actively try to break the code. Look for:
+        - Security vulnerabilities (injection, auth bypass, data exposure)
+        - Race conditions and concurrency bugs
+        - Resource leaks and error handling gaps
+        - Logic errors and incorrect assumptions
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Adversarial review of: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_context]
+      timeout_seconds: 300
+
+  # Step 2: Edge case review (parallel with step 1)
+  - id: edge_case_review
+    type: agent
+    depends_on: [memory_context]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa. Walk every branching path and boundary condition.
+        Focus on:
+        - Off-by-one errors, empty collections, null/None values
+        - Overflow, underflow, division by zero
+        - Unicode, special characters, max-length inputs
+        - Timeout and cancellation scenarios
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Edge case analysis of: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_context]
+      timeout_seconds: 300
+
+  # Step 3: Security review (parallel with steps 1 & 2)
+  - id: security_review
+    type: agent
+    depends_on: [memory_context]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa with security specialization. Focus exclusively on:
+        - OWASP Top 10 vulnerabilities
+        - Authentication and authorization flaws
+        - Input validation and output encoding
+        - Secrets and credential handling
+        - Dependency vulnerabilities
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Security review of: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_context]
+      timeout_seconds: 300
+
+  # Step 4: Synthesis — combines all review findings
+  - id: review_synthesis
+    type: agent
+    depends_on: [adversarial_review, edge_case_review, security_review]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are a senior tech lead synthesizing three independent code reviews.
+        Combine findings from adversarial, edge-case, and security reviews.
+        Deduplicate overlapping findings. Prioritize by severity.
+        Produce a unified verdict:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Synthesize review findings for: {{input}}"
+      max_tokens: 4096
+      context_from: [adversarial_review, edge_case_review, security_review]
+      timeout_seconds: 300

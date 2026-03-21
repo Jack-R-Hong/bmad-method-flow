@@ -1,5 +1,5 @@
 # generated: 2026-03-18
-# last_updated: 2026-03-18
+# last_updated: 2026-03-21
 # project: bmad-method-flow
 # project_key: NOKEY
 # tracking_system: file-system
@@ -87,3 +87,39 @@ development_status:
   6-2-coding-workflow-memory-step-integration: done
   6-3-standalone-memory-index-workflow-and-pack-integration: done
   epic-6-retrospective: done
+
+  # Epic 7: Structured Test Result Parsing (test-parser)
+  epic-7: done
+  7-1-wasm-crate-setup-and-multi-format-parser-core: done
+  7-2-additional-framework-parsers: done
+  7-3-workflow-integration-and-context-from-output-contract: done
+  epic-7-retrospective: optional
+
+  # Epic 8: Iterative Fix Loops
+  epic-8: done
+  8-1-retry-loop-engine-in-workflow-executor: done
+  8-2-progressive-context-enrichment: done
+  8-3-retry-enabled-workflow-templates: done
+  epic-8-retrospective: optional
+
+  # Epic 9: Automated PR Pipeline
+  epic-9: done
+  9-1-push-and-pr-steps-in-git-ops-executor: done
+  9-2-auto-generated-pr-title-and-body: done
+  9-3-pr-pipeline-integration-in-coding-workflows: done
+  epic-9-retrospective: optional
+
+  # Epic 10: Parallel Step Execution
+  epic-10: done
+  10-1-concurrent-step-dispatcher: done
+  10-2-concurrent-output-collection-and-context-assembly: done
+  10-3-parallel-review-workflow-optimization: done
+  epic-10-retrospective: optional
+
+  # Epic 11: E2E Integration Testing & Validation
+  epic-11: done
+  11-1-test-fixture-project-and-harness-setup: done
+  11-2-happy-path-e2e-feature-dev-full-cycle: done
+  11-3-failure-path-e2e-quality-gate-blocks-commit: done
+  11-4-retry-loop-e2e-validation: done
+  epic-11-retrospective: optional
