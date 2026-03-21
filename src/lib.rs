@@ -440,6 +440,23 @@ mod tests {
 
     #[test]
     fn plugin_health_check_returns_true() {
+        // Create stub plugin binaries so health_check can find them
+        let plugins_dir = std::path::Path::new("config/plugins");
+        std::fs::create_dir_all(plugins_dir).unwrap();
+
+        for name in &["bmad-method", "provider-claude-code"] {
+            let path = plugins_dir.join(name);
+            if !path.exists() {
+                std::fs::write(&path, "#!/bin/sh\n").unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                }
+            }
+        }
+
         let plugin = CodingPackPlugin;
         assert!(plugin.health_check());
     }
