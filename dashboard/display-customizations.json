@@ -66,6 +66,27 @@
         },
         "data_endpoint": "tasks/{task_id}/agent-info"
       }
+    },
+    {
+      "plugin_name": "plugin-coding-pack",
+      "customization": {
+        "id": "sprint-progress",
+        "title": "Sprint Progress",
+        "target_view": "workflow",
+        "render_priority": 5,
+        "customization": {
+          "type": "badge",
+          "key": "sprint_progress",
+          "label": "Sprint",
+          "color_mapping": {
+            "on-track": "#10b981",
+            "at-risk": "#f59e0b",
+            "blocked": "#ef4444",
+            "default": "#64748b"
+          }
+        },
+        "data_endpoint": "board/summary"
+      }
     }
   ]
 }

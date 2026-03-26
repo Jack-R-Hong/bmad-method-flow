@@ -242,13 +242,24 @@ fn execute_data_query(endpoint: &str, config: &WorkspaceConfig) -> Result<String
         "status" => pack_status_value(config)?,
         "workflows/list" => list_workflows_detail_value(config)?,
         "agents/list" => list_agents_value()?,
+        "board/data" => crate::board::get_board_data(config)?,
+        "board/filters" => crate::board::get_filter_options(config)?,
+        "board/summary" => crate::board::get_board_summary(config)?,
+        ep if ep.starts_with("board/epics/") => {
+            let id = ep.strip_prefix("board/epics/").unwrap_or("");
+            crate::board::get_epic_detail(id, config)?
+        }
+        ep if ep.starts_with("board/stories/") => {
+            let id = ep.strip_prefix("board/stories/").unwrap_or("");
+            crate::board::get_story_detail(id, config)?
+        }
         ep if ep.starts_with("workflows/") => {
             let id = ep.strip_prefix("workflows/").unwrap_or("");
             get_workflow_detail_value(id, config)?
         }
         _ => {
             return Err(WitPluginError::not_found(format!(
-                "Unknown data endpoint: '{}'. Available: status, workflows/list, agents/list, workflows/{{id}}",
+                "Unknown data endpoint: '{}'. Available: status, workflows/list, agents/list, workflows/{{id}}, board/data, board/filters, board/summary, board/epics/{{id}}, board/stories/{{id}}",
                 endpoint
             )));
         }

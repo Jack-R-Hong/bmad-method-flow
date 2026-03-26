@@ -1,5 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agent_registry;
+pub mod board;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config_injector;
 pub mod executor;
@@ -30,9 +31,7 @@ pub fn metadata() -> pulse_plugin_sdk::PluginMetadata {
         env!("CARGO_PKG_VERSION"),
         pulse_plugin_sdk::API_VERSION,
     )
-    .with_description(
-        "Coding pack orchestrator with BMAD agent injection and tool provider",
-    )
+    .with_description("Coding pack orchestrator with BMAD agent injection and tool provider")
 }
 
 /// Registers plugin-coding-pack with Pulse's plugin registry (server mode).
@@ -407,6 +406,125 @@ impl DashboardExtensionPlugin for CodingPackPlugin {
                     "event_endpoint": "executions/stream",
                     "event_types": ["execution_start", "step_start", "step_complete", "step_error", "execution_complete"]
                 }
+            },
+            {
+                "id": "board",
+                "title": "Scrum Board",
+                "path": "/board",
+                "icon": "kanban-square",
+                "nav_order": 6,
+                "description": "Kanban board showing epics and stories by status",
+                "layout": {
+                    "type": "board",
+                    "data_endpoint": "board/data",
+                    "columns": [
+                        { "id": "backlog", "label": "Backlog", "color": "#64748b" },
+                        { "id": "ready-for-dev", "label": "Ready", "color": "#3b82f6" },
+                        { "id": "in-progress", "label": "In Progress", "color": "#f59e0b" },
+                        { "id": "review", "label": "Review", "color": "#8b5cf6" },
+                        { "id": "done", "label": "Done", "color": "#10b981" }
+                    ],
+                    "swimlane_key": "epic_id",
+                    "card_fields": ["id", "title", "status", "epic_title", "phase"],
+                    "status_field": "status",
+                    "filters_endpoint": "board/filters",
+                    "filters": [
+                        { "id": "phase", "label": "Phase", "type": "select", "options_key": "phases" },
+                        { "id": "epic", "label": "Epic", "type": "select", "options_key": "epics" },
+                        { "id": "item_type", "label": "Type", "type": "select", "options_key": "types" }
+                    ]
+                }
+            },
+            {
+                "id": "epic-detail",
+                "title": "Epic Detail",
+                "path": "/board/epics/:id",
+                "icon": "layers",
+                "nav_order": 99,
+                "description": "Epic details including stories and progress",
+                "layout": {
+                    "type": "detail",
+                    "sections": [
+                        {
+                            "id": "info",
+                            "title": "Epic Info",
+                            "fields": [
+                                { "key": "id", "label": "Epic ID" },
+                                { "key": "title", "label": "Title" },
+                                { "key": "status", "label": "Status" },
+                                { "key": "phase_label", "label": "Phase" },
+                                { "key": "progress", "label": "Progress" }
+                            ]
+                        },
+                        {
+                            "id": "description",
+                            "title": "Description",
+                            "fields": [
+                                { "key": "description", "label": "Description" }
+                            ]
+                        },
+                        {
+                            "id": "requirements",
+                            "title": "Requirements Coverage",
+                            "fields": [
+                                { "key": "frs_covered", "label": "FRs Covered" },
+                                { "key": "nfrs_covered", "label": "NFRs Covered" }
+                            ]
+                        },
+                        {
+                            "id": "stories",
+                            "title": "Stories",
+                            "fields": [
+                                { "key": "story_count", "label": "Total Stories" },
+                                { "key": "stories_done", "label": "Completed" },
+                                { "key": "stories_in_progress", "label": "In Progress" },
+                                { "key": "story_list", "label": "Story Breakdown" }
+                            ]
+                        }
+                    ],
+                    "data_endpoint": "board/epics/{id}"
+                }
+            },
+            {
+                "id": "story-detail",
+                "title": "Story Detail",
+                "path": "/board/stories/:id",
+                "icon": "bookmark",
+                "nav_order": 99,
+                "description": "Story details with acceptance criteria",
+                "layout": {
+                    "type": "detail",
+                    "sections": [
+                        {
+                            "id": "info",
+                            "title": "Story Info",
+                            "fields": [
+                                { "key": "id", "label": "Story ID" },
+                                { "key": "title", "label": "Title" },
+                                { "key": "story_number", "label": "Story Number" },
+                                { "key": "status", "label": "Status" },
+                                { "key": "epic_id", "label": "Epic" },
+                                { "key": "epic_title", "label": "Epic Title" },
+                                { "key": "phase_label", "label": "Phase" }
+                            ]
+                        },
+                        {
+                            "id": "user-story",
+                            "title": "User Story",
+                            "fields": [
+                                { "key": "user_story", "label": "User Story" }
+                            ]
+                        },
+                        {
+                            "id": "acceptance",
+                            "title": "Acceptance Criteria",
+                            "fields": [
+                                { "key": "acceptance_criteria", "label": "Criteria" }
+                            ]
+                        }
+                    ],
+                    "data_endpoint": "board/stories/{id}"
+                }
             }
         ])
         .to_string()
@@ -427,7 +545,12 @@ impl DashboardExtensionPlugin for CodingPackPlugin {
                     "GET  /agents/{id}      — Agent detail",
                     "GET  /executions/stream — SSE execution event stream",
                     "GET  /tasks/{task_id}/workflow-context — Task workflow context",
-                    "GET  /tasks/{task_id}/agent-info — Task agent info"
+                    "GET  /tasks/{task_id}/agent-info — Task agent info",
+                    "GET  /board/data       — Scrum board with all epics and stories",
+                    "GET  /board/filters    — Available filter options for board",
+                    "GET  /board/summary    — Compact sprint progress summary",
+                    "GET  /board/epics/{id} — Epic detail with stories",
+                    "GET  /board/stories/{id} — Story detail with acceptance criteria"
                 ]
             }
         ])
@@ -493,6 +616,24 @@ impl DashboardExtensionPlugin for CodingPackPlugin {
                 },
                 "data_endpoint": "tasks/{task_id}/agent-info",
                 "render_priority": 30
+            },
+            {
+                "id": "sprint-progress",
+                "title": "Sprint Progress",
+                "target_view": "workflow",
+                "customization": {
+                    "type": "badge",
+                    "key": "sprint_progress",
+                    "label": "Sprint",
+                    "color_mapping": {
+                        "on-track": "#10b981",
+                        "at-risk": "#f59e0b",
+                        "blocked": "#ef4444",
+                        "default": "#64748b"
+                    }
+                },
+                "data_endpoint": "board/summary",
+                "render_priority": 5
             }
         ])
         .to_string()
@@ -609,17 +750,18 @@ mod tests {
         let json = plugin.get_pages_json();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let pages = parsed.as_array().unwrap();
-        assert_eq!(pages.len(), 7);
+        assert_eq!(pages.len(), 10);
 
         // Verify all SDK layout types are present
         let layout_types: Vec<&str> = pages
             .iter()
-            .map(|p| p["layout"]["type"].as_str().unwrap())
+            .filter_map(|p| p["layout"]["type"].as_str())
             .collect();
         assert!(layout_types.contains(&"table"), "missing table layout");
         assert!(layout_types.contains(&"detail"), "missing detail layout");
         assert!(layout_types.contains(&"form"), "missing form layout");
         assert!(layout_types.contains(&"stream"), "missing stream layout");
+        assert!(layout_types.contains(&"board"), "missing board layout");
 
         // Overview page
         assert_eq!(pages[0]["id"], "overview");
@@ -667,9 +809,9 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("plugin-coding-pack"));
-        // Verify endpoints are documented
+        // Verify endpoints are documented (10 original + 5 board endpoints)
         let endpoints = routes[0]["endpoints"].as_array().unwrap();
-        assert!(endpoints.len() >= 5);
+        assert!(endpoints.len() >= 15);
     }
 
     #[test]
@@ -678,7 +820,7 @@ mod tests {
         let json = plugin.get_display_customizations_json();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let customs = parsed.as_array().unwrap();
-        assert_eq!(customs.len(), 3);
+        assert_eq!(customs.len(), 4);
 
         // Pack health badge on workflow view
         assert_eq!(customs[0]["id"], "coding-pack-health");
@@ -694,5 +836,10 @@ mod tests {
         assert_eq!(customs[2]["id"], "coding-pack-agent");
         assert_eq!(customs[2]["target_view"], "task");
         assert_eq!(customs[2]["customization"]["type"], "badge");
+
+        // Sprint progress badge on workflow view
+        assert_eq!(customs[3]["id"], "sprint-progress");
+        assert_eq!(customs[3]["target_view"], "workflow");
+        assert_eq!(customs[3]["customization"]["type"], "badge");
     }
 }
