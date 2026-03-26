@@ -1,15 +1,23 @@
 #![forbid(unsafe_code)]
 
+use plugin_coding_pack::config_injector::BmadAgentInjector;
+use plugin_coding_pack::tool_provider::BmadToolProvider;
 use plugin_coding_pack::CodingPackPlugin;
 use pulse_plugin_sdk::wit_traits::{DashboardExtensionPlugin, PluginLifecycle, StepExecutorPlugin};
 use pulse_plugin_sdk::wit_types::{StepConfig, TaskInput};
+use pulse_plugin_sdk::ConfigInjector;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let plugin = CodingPackPlugin;
-    // Combined adapter: handles step-executor + dashboard-extension methods
+    let manifest_path = std::path::PathBuf::from("_bmad/_config/agent-manifest.csv");
+    let injector = BmadAgentInjector::new(&manifest_path);
+    let tool_provider = BmadToolProvider::new(
+        plugin_coding_pack::workspace::WorkspaceConfig::resolve(None),
+    );
+    // Combined adapter: handles step-executor + dashboard-extension + config-injector + tool-provider methods
     pulse_plugin_sdk::dev_adapter::run_custom_stdio(move |method, params| {
-        dispatch_combined(&plugin, method, params)
+        dispatch_combined(&plugin, &injector, &tool_provider, method, params)
     });
 }
 
@@ -19,10 +27,15 @@ fn main() {}
 #[cfg(not(target_arch = "wasm32"))]
 fn dispatch_combined(
     plugin: &CodingPackPlugin,
+    injector: &BmadAgentInjector,
+    tool_provider: &BmadToolProvider,
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, pulse_plugin_sdk::dev_adapter::DispatchError> {
     use pulse_plugin_sdk::dev_adapter::DispatchError;
+    use pulse_plugin_sdk::traits::tool_provider::ToolProvider;
+    use pulse_plugin_sdk::types::injection::InjectionQuery;
+    use pulse_plugin_sdk::types::llm::ToolCall;
 
     match method {
         // ── Plugin lifecycle ──
@@ -70,6 +83,60 @@ fn dispatch_combined(
             let json_str = plugin.get_display_customizations_json();
             serde_json::from_str(&json_str)
                 .map_err(|e| DispatchError::Internal(format!("invalid customizations JSON: {e}")))
+        }
+
+        // ── Config injector ──
+        "config-injector.injector-name" => {
+            let name = injector.injector_name();
+            serde_json::to_value(name).map_err(|e| DispatchError::Internal(e.to_string()))
+        }
+        "config-injector.priority" => {
+            let priority = injector.priority();
+            serde_json::to_value(priority).map_err(|e| DispatchError::Internal(e.to_string()))
+        }
+        "config-injector.applies-to" => {
+            let query: InjectionQuery = serde_json::from_value(params)
+                .map_err(|e| DispatchError::InvalidParams(format!("invalid query: {e}")))?;
+            let applies = injector.applies_to(&query);
+            serde_json::to_value(applies).map_err(|e| DispatchError::Internal(e.to_string()))
+        }
+        "config-injector.provide-injections" => {
+            let query: InjectionQuery = serde_json::from_value(params)
+                .map_err(|e| DispatchError::InvalidParams(format!("invalid query: {e}")))?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| DispatchError::Internal(format!("runtime error: {e}")))?;
+            let result = rt.block_on(injector.provide_injections(&query));
+            match result {
+                Ok(injections) => serde_json::to_value(injections)
+                    .map_err(|e| DispatchError::Internal(e.to_string())),
+                Err(e) => Err(DispatchError::Internal(e.to_string())),
+            }
+        }
+
+        // ── Tool provider ──
+        "tool-provider.provider-name" => {
+            let name = tool_provider.provider_name();
+            serde_json::to_value(name).map_err(|e| DispatchError::Internal(e.to_string()))
+        }
+        "tool-provider.available-tools" => {
+            let tools = tool_provider.available_tools();
+            serde_json::to_value(tools).map_err(|e| DispatchError::Internal(e.to_string()))
+        }
+        "tool-provider.execute-tool" => {
+            let call: ToolCall = serde_json::from_value(params)
+                .map_err(|e| DispatchError::InvalidParams(format!("invalid tool call: {e}")))?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| DispatchError::Internal(format!("runtime error: {e}")))?;
+            let result = rt.block_on(tool_provider.execute_tool(call));
+            match result {
+                Ok(tool_result) => serde_json::to_value(tool_result)
+                    .map_err(|e| DispatchError::Internal(e.to_string())),
+                Err(e) => Err(DispatchError::Internal(e.to_string())),
+            }
         }
 
         _ => Err(DispatchError::MethodNotFound(format!(

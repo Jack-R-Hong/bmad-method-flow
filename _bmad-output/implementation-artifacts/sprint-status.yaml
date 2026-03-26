@@ -1,5 +1,6 @@
 # generated: 2026-03-18
-# last_updated: 2026-03-21
+# last_updated: 2026-03-26 (Epics 18-21 done after code review + 7 fixes)
+# stories_created: 2026-03-26 (Epics 18-21 stories created)
 # project: bmad-method-flow
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-18
-last_updated: 2026-03-21
+last_updated: 2026-03-26
 project: bmad-method-flow
 project_key: NOKEY
 tracking_system: file-system
@@ -123,3 +124,82 @@ development_status:
   11-3-failure-path-e2e-quality-gate-blocks-commit: done
   11-4-retry-loop-e2e-validation: done
   epic-11-retrospective: optional
+
+  # ============================================================
+  # SDK Integration & Agent Mesh (Phase 2)
+  # ============================================================
+
+  # Epic 12: BMAD Agent Registry and Discovery
+  epic-12: in-progress
+  12-1-create-bmadagentregistry-struct-with-agent-definition-constants: ready-for-dev
+  12-2-implement-agentdefinitionprovider-trait-on-bmadagentregistry: ready-for-dev
+  12-3-add-unit-tests-for-agent-registry-completeness-and-correctness: ready-for-dev
+  epic-12-retrospective: optional
+
+  # Epic 13: Agent Mesh Configuration and Depth Guard
+  epic-13: in-progress
+  13-1-add-agentmeshsettings-to-workspace-configuration: ready-for-dev
+  13-2-implement-depth-guard-check-in-executor: ready-for-dev
+  13-3-inject-agent-mesh-config-into-json-rpc-parameters: ready-for-dev
+  epic-13-retrospective: optional
+
+  # Epic 14: Tool Calling Support and Unified LLM Types
+  epic-14: in-progress
+  14-1-adopt-sdk-llm-types-for-internal-request-and-response-construction: ready-for-dev
+  14-2-forward-tool-definitions-from-step-config-to-llm-provider: ready-for-dev
+  epic-14-retrospective: optional
+
+  # Epic 15: Multi-Agent Session Deliberation
+  epic-15: in-progress
+  15-1-define-session-configuration-types-and-parsing: ready-for-dev
+  15-2-implement-session-turn-loop-with-activation-evaluation: ready-for-dev
+  15-3-implement-convergence-evaluation-and-session-output: ready-for-dev
+  15-4-integrate-session-step-type-into-executor-dispatch: ready-for-dev
+  epic-15-retrospective: optional
+
+  # Epic 16: Agent Mesh ACL Generation and Pack Actions
+  epic-16: in-progress
+  16-1-implement-generate-agents-yaml-pack-action: ready-for-dev
+  16-2-implement-list-agents-pack-action: ready-for-dev
+  16-3-define-acl-rules-as-constants-in-agent-registry: ready-for-dev
+  epic-16-retrospective: optional
+
+  # Epic 17: Module Wiring, Validation, and Workflow Integration
+  epic-17: in-progress
+  17-1-wire-new-modules-into-crate-root-and-plugin-trait: ready-for-dev
+  17-2-extend-validator-for-session-step-configs-and-agents-yaml: ready-for-dev
+  17-3-update-workflow-yaml-templates-with-session-and-mesh-features: ready-for-dev
+  epic-17-retrospective: optional
+
+  # ============================================================
+  # Config Injection & Tool Provider Integration (Phase 3)
+  # Source: epics-config-injection.md
+  # ============================================================
+
+  # Epic 18: BMAD Methodology Markdown Config (Phase 1 — zero code)
+  epic-18: done
+  18-1-create-default-agent-md-for-bmad-methodology-overview: done
+  18-2-create-default-rule-md-for-coding-standards: done
+  18-3-create-default-skill-md-for-available-capabilities: done
+  18-4-create-provider-override-directory-structure: done
+  epic-18-retrospective: optional
+
+  # Epic 19: BMAD Agent Config Injection (Phase 2 — ConfigInjector trait)
+  epic-19: done
+  19-1-implement-bmadagentinjector-with-agent-manifest-csv-loading: done
+  19-2-implement-applies-to-filtering-and-provide-injections: done
+  19-3-register-bmadagentinjector-via-hookpoint-and-add-unit-tests: done
+  epic-19-retrospective: optional
+
+  # Epic 20: BMAD Tool Provider (Phase 2 — ToolProvider trait)
+  epic-20: done
+  20-1-implement-bmadtoolprovider-with-tool-definitions: done
+  20-2-implement-execute-tool-routing-to-pack-execute-action: done
+  20-3-register-bmadtoolprovider-via-hookpoint-and-add-unit-tests: done
+  epic-20-retrospective: optional
+
+  # Epic 21: Executor Pipeline Integration (Phase 2 — executor refactor)
+  epic-21: done
+  21-1-populate-injectionquery-context-in-executor: done
+  21-2-remove-two-stage-persona-fetch-with-feature-detection: done
+  epic-21-retrospective: optional

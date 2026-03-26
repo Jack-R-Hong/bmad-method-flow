@@ -1,4 +1,5 @@
 use pulse_plugin_sdk::error::WitPluginError;
+use pulse_plugin_sdk::types::injection::InjectionQuery;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -9,8 +10,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
-const PLUGINS_DIR: &str = "config/plugins";
-const WORKFLOWS_DIR: &str = "config/workflows";
 
 // ── Workflow YAML deserialization ───────────────────────────────────────────
 
@@ -103,7 +102,7 @@ enum StepStatus {
 
 // ── Public entry point ─────────────────────────────────────────────────────
 
-/// Execute a workflow by ID. Called from `pack::execute_action()`.
+/// Execute a workflow by ID using default workspace config (current directory).
 pub fn execute_workflow(
     workflow_id: &str,
     user_input: &str,
@@ -111,23 +110,22 @@ pub fn execute_workflow(
     execute_workflow_in(workflow_id, user_input, Path::new("."))
 }
 
-/// Execute a workflow with a configurable base directory.
-/// All relative paths (config/plugins, config/workflows) are resolved from `base_dir`.
-pub fn execute_workflow_in(
+/// Execute a workflow with a WorkspaceConfig providing resolved paths and defaults.
+pub fn execute_workflow_with_config(
     workflow_id: &str,
     user_input: &str,
-    base_dir: &Path,
+    config: &crate::workspace::WorkspaceConfig,
 ) -> Result<serde_json::Value, WitPluginError> {
     let start = Instant::now();
-    let plugins_dir = base_dir.join(PLUGINS_DIR);
-    let workflows_dir = base_dir.join(WORKFLOWS_DIR);
+    let plugins_dir = &config.plugins_dir;
+    let workflows_dir = &config.workflows_dir;
 
     // 1. Load and parse workflow YAML
     let workflow_path = workflows_dir.join(format!("{}.yaml", workflow_id));
     let workflow = load_workflow(&workflow_path)?;
 
     // 2. Check required plugins
-    check_required_plugins(&workflow, &plugins_dir)?;
+    check_required_plugins(&workflow, plugins_dir)?;
 
     // 3. Topological sort
     let execution_order = topological_sort(&workflow.steps)?;
@@ -137,6 +135,50 @@ pub fn execute_workflow_in(
     let mut template_vars: HashMap<String, String> = HashMap::new();
     template_vars.insert("input".to_string(), user_input.to_string());
 
+    // Seed workflow_id and workspace defaults into template vars
+    template_vars.insert("workflow_id".to_string(), workflow_id.to_string());
+    if let Some(model) = &config.defaults.default_model {
+        template_vars.insert("default_model".to_string(), model.clone());
+    }
+    if let Some(budget) = config.defaults.max_budget_usd {
+        template_vars.insert("max_budget_usd".to_string(), budget.to_string());
+    }
+
+    execute_workflow_steps(
+        workflow_id,
+        &workflow,
+        &execution_order,
+        &mut outputs,
+        &mut template_vars,
+        plugins_dir,
+        start,
+        config.use_injection_pipeline,
+    )
+}
+
+/// Execute a workflow with a configurable base directory.
+/// All relative paths (config/plugins, config/workflows) are resolved from `base_dir`.
+pub fn execute_workflow_in(
+    workflow_id: &str,
+    user_input: &str,
+    base_dir: &Path,
+) -> Result<serde_json::Value, WitPluginError> {
+    let config = crate::workspace::WorkspaceConfig::from_base_dir(base_dir);
+    execute_workflow_with_config(workflow_id, user_input, &config)
+}
+
+/// Internal: run the workflow step loop given pre-resolved state.
+#[allow(clippy::too_many_arguments)]
+fn execute_workflow_steps(
+    workflow_id: &str,
+    workflow: &WorkflowDef,
+    execution_order: &[String],
+    outputs: &mut HashMap<String, StepOutput>,
+    template_vars: &mut HashMap<String, String>,
+    plugins_dir: &Path,
+    start: Instant,
+    use_injection_pipeline: bool,
+) -> Result<serde_json::Value, WitPluginError> {
     let mut failed_required = false;
 
     // Build retry index: map from on_failure_of step -> (retryable step id, RetryConfig)
@@ -178,7 +220,7 @@ pub fn execute_workflow_in(
         }
 
         // Check if all dependencies are satisfied
-        if !dependencies_satisfied(step, &outputs, &workflow.steps) {
+        if !dependencies_satisfied(step, outputs, &workflow.steps) {
             let output = StepOutput {
                 step_id: step.id.clone(),
                 status: StepStatus::Skipped,
@@ -202,7 +244,13 @@ pub fn execute_workflow_in(
             step.step_type
         );
 
-        let result = execute_step(step, &outputs, &template_vars, &plugins_dir);
+        let result = execute_step(
+            step,
+            outputs,
+            template_vars,
+            plugins_dir,
+            use_injection_pipeline,
+        );
 
         match result {
             Ok((mut output, session_id)) => {
@@ -229,7 +277,7 @@ pub fn execute_workflow_in(
                 if output.status == StepStatus::Success {
                     if let Some(config) = &step.config {
                         if let Some(cmd) = &config.command {
-                            if let Some(wt_path) = extract_worktree_path(cmd, &template_vars) {
+                            if let Some(wt_path) = extract_worktree_path(cmd, template_vars) {
                                 eprintln!("[workflow]   worktree: {}", wt_path);
                                 template_vars.insert("working_dir".to_string(), wt_path);
                             }
@@ -425,7 +473,10 @@ fn load_workflow(path: &Path) -> Result<WorkflowDef, WitPluginError> {
 
 // ── Plugin availability ────────────────────────────────────────────────────
 
-fn check_required_plugins(workflow: &WorkflowDef, plugins_dir: &Path) -> Result<(), WitPluginError> {
+fn check_required_plugins(
+    workflow: &WorkflowDef,
+    plugins_dir: &Path,
+) -> Result<(), WitPluginError> {
     if let Some(requires) = &workflow.requires {
         for req in requires {
             let plugin_path = plugins_dir.join(&req.plugin);
@@ -748,6 +799,7 @@ fn execute_step(
     outputs: &HashMap<String, StepOutput>,
     template_vars: &HashMap<String, String>,
     plugins_dir: &Path,
+    use_injection_pipeline: bool,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let timeout_secs = step
         .config
@@ -756,8 +808,17 @@ fn execute_step(
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
     match step.step_type.as_str() {
-        "agent" => execute_agent_step(step, outputs, template_vars, timeout_secs, plugins_dir),
-        "function" => execute_function_step(step, template_vars, timeout_secs, plugins_dir).map(|o| (o, None)),
+        "agent" => execute_agent_step(
+            step,
+            outputs,
+            template_vars,
+            timeout_secs,
+            plugins_dir,
+            use_injection_pipeline,
+        ),
+        "function" => {
+            execute_function_step(step, template_vars, timeout_secs, plugins_dir).map(|o| (o, None))
+        }
         other => Err(WitPluginError::invalid_input(format!(
             "step '{}': unknown step type '{}'",
             step.id, other
@@ -774,12 +835,14 @@ fn execute_step(
 // Session continuity: provider-claude-code returns session_id which is forwarded
 // to subsequent calls via template_vars["session_id"].
 
+#[allow(clippy::too_many_arguments)]
 fn execute_agent_step(
     step: &StepDef,
     outputs: &HashMap<String, StepOutput>,
     template_vars: &HashMap<String, String>,
     timeout_secs: u64,
     plugins_dir: &Path,
+    use_injection_pipeline: bool,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let start = Instant::now();
 
@@ -820,6 +883,7 @@ fn execute_agent_step(
             timeout_secs,
             start,
             plugins_dir,
+            use_injection_pipeline,
         )
     } else {
         execute_direct_agent_step(
@@ -838,6 +902,10 @@ fn execute_agent_step(
 /// Two-stage execution for bmad-method agent steps:
 /// 1. Call bmad-method to get agent persona (system prompt + config)
 /// 2. Call provider-claude-code with that persona to do actual LLM reasoning
+///
+/// When `use_injection_pipeline` is true, Stage 1 is skipped and the injection
+/// pipeline (BmadAgentInjector) handles system prompt composition.
+#[allow(clippy::too_many_arguments)]
 fn execute_bmad_agent_step(
     step: &StepDef,
     prompt: &str,
@@ -846,6 +914,7 @@ fn execute_bmad_agent_step(
     timeout_secs: u64,
     start: Instant,
     plugins_dir: &Path,
+    use_injection_pipeline: bool,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let bmad_binary = plugins_dir.join("bmad-method");
     if !bmad_binary.exists() {
@@ -864,68 +933,93 @@ fn execute_bmad_agent_step(
         )));
     }
 
-    // Stage 1: Get agent persona from bmad-method
     let agent_name = extract_agent_name(config);
-    eprintln!("[workflow]   stage 1: fetching persona '{}'", agent_name);
 
-    let persona_request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "step-executor.execute",
-        "params": {
-            "task": {
-                "task_id": format!("wf-{}-persona", step.id),
-                "description": "fetch agent persona",
-                "input": {
-                    "agent": agent_name,
-                    "prompt": prompt,
-                },
-            },
-            "config": {
-                "step_id": format!("{}-persona", step.id),
-                "step_type": "agent",
-            }
+    let injection_query = {
+        let mut query = InjectionQuery::new();
+        if agent_name.starts_with("bmad/") {
+            query.agent_name = Some(agent_name.clone());
         }
-    });
-
-    let persona_response = spawn_plugin_rpc(&bmad_binary, &persona_request, 30)?;
-    let persona_content = extract_rpc_content(&persona_response)?;
-
-    // Parse the persona JSON to extract the agent's system_prompt
-    let persona: serde_json::Value = serde_json::from_str(&persona_content).map_err(|e| {
-        WitPluginError::internal(format!(
-            "step '{}': failed to parse persona JSON: {}",
-            step.id, e
-        ))
-    })?;
-
-    let agent_system_prompt = persona
-        .get("system_prompt")
-        .and_then(|s| s.as_str())
-        .unwrap_or("");
-
-    // Merge: workflow system_prompt provides task-specific instructions,
-    // persona system_prompt provides the agent's character/role
-    let merged_system_prompt = if let Some(workflow_sp) = &config.system_prompt {
-        format!(
-            "{}\n\n## Task-Specific Instructions\n{}",
-            agent_system_prompt, workflow_sp
-        )
-    } else {
-        agent_system_prompt.to_string()
+        query.workflow_name = template_vars.get("workflow_id").cloned();
+        query.step_type = Some("agent".to_string());
+        query
     };
 
-    // Extract suggested config from persona
-    let suggested_model = persona
-        .get("suggested_config")
-        .and_then(|c| c.get("model_tier"))
-        .and_then(|m| m.as_str());
+    let (merged_system_prompt, model_tier) = if use_injection_pipeline {
+        // New path: injection pipeline handles system prompt composition
+        eprintln!("[workflow]   injection pipeline active — skipping persona fetch");
+        let model_tier = config
+            .model_tier
+            .as_deref()
+            .unwrap_or("balanced")
+            .to_string();
+        (None, model_tier)
+    } else {
+        // Legacy two-stage path — retained for backward compatibility when use_injection_pipeline is false
+        eprintln!("[workflow]   stage 1: fetching persona '{}'", agent_name);
 
-    let model_tier = config
-        .model_tier
-        .as_deref()
-        .or(suggested_model)
-        .unwrap_or("balanced");
+        let persona_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "step-executor.execute",
+            "params": {
+                "task": {
+                    "task_id": format!("wf-{}-persona", step.id),
+                    "description": "fetch agent persona",
+                    "input": {
+                        "agent": agent_name,
+                        "prompt": prompt,
+                    },
+                },
+                "config": {
+                    "step_id": format!("{}-persona", step.id),
+                    "step_type": "agent",
+                }
+            }
+        });
+
+        let persona_response = spawn_plugin_rpc(&bmad_binary, &persona_request, 30)?;
+        let persona_content = extract_rpc_content(&persona_response)?;
+
+        // Parse the persona JSON to extract the agent's system_prompt
+        let persona: serde_json::Value = serde_json::from_str(&persona_content).map_err(|e| {
+            WitPluginError::internal(format!(
+                "step '{}': failed to parse persona JSON: {}",
+                step.id, e
+            ))
+        })?;
+
+        let agent_system_prompt = persona
+            .get("system_prompt")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+
+        // Merge: workflow system_prompt provides task-specific instructions,
+        // persona system_prompt provides the agent's character/role
+        let merged = if let Some(workflow_sp) = &config.system_prompt {
+            format!(
+                "{}\n\n## Task-Specific Instructions\n{}",
+                agent_system_prompt, workflow_sp
+            )
+        } else {
+            agent_system_prompt.to_string()
+        };
+
+        // Extract suggested config from persona
+        let suggested_model = persona
+            .get("suggested_config")
+            .and_then(|c| c.get("model_tier"))
+            .and_then(|m| m.as_str());
+
+        let model_tier = config
+            .model_tier
+            .as_deref()
+            .or(suggested_model)
+            .unwrap_or("balanced")
+            .to_string();
+
+        (Some(merged), model_tier)
+    };
 
     // Stage 2: Call provider-claude-code with the persona
     eprintln!(
@@ -934,10 +1028,9 @@ fn execute_bmad_agent_step(
     );
 
     let mut parameters = serde_json::Map::new();
-    parameters.insert(
-        "system_prompt".to_string(),
-        serde_json::json!(merged_system_prompt),
-    );
+    if let Some(ref sp) = merged_system_prompt {
+        parameters.insert("system_prompt".to_string(), serde_json::json!(sp));
+    }
     parameters.insert("model_tier".to_string(), serde_json::json!(model_tier));
     if let Some(tokens) = config.max_tokens {
         parameters.insert("max_tokens".to_string(), serde_json::json!(tokens));
@@ -954,6 +1047,12 @@ fn execute_bmad_agent_step(
         .or_else(|| template_vars.get("working_dir").cloned());
     if let Some(ref wd) = work_dir {
         parameters.insert("working_dir".to_string(), serde_json::json!(wd));
+    }
+    // Forward injection query so the engine can invoke the injection pipeline
+    if use_injection_pipeline {
+        if let Ok(iq_val) = serde_json::to_value(&injection_query) {
+            parameters.insert("injection_query".to_string(), iq_val);
+        }
     }
 
     let claude_request = serde_json::json!({
@@ -984,6 +1083,7 @@ fn execute_bmad_agent_step(
 }
 
 /// Direct execution for provider-claude-code (or other non-bmad executors)
+#[allow(clippy::too_many_arguments)]
 fn execute_direct_agent_step(
     step: &StepDef,
     executor: &str,
@@ -1003,6 +1103,14 @@ fn execute_direct_agent_step(
             plugin_binary.display()
         )));
     }
+
+    let injection_query = {
+        let mut query = InjectionQuery::new();
+        // No BMAD agent name for direct execution
+        query.workflow_name = template_vars.get("workflow_id").cloned();
+        query.step_type = Some("agent".to_string());
+        query
+    };
 
     let mut parameters = serde_json::Map::new();
     if let Some(sp) = &config.system_prompt {
@@ -1025,6 +1133,10 @@ fn execute_direct_agent_step(
         .or_else(|| template_vars.get("working_dir").cloned());
     if let Some(ref wd) = work_dir {
         parameters.insert("working_dir".to_string(), serde_json::json!(wd));
+    }
+    // Forward injection query for the engine's injection pipeline
+    if let Ok(iq_val) = serde_json::to_value(&injection_query) {
+        parameters.insert("injection_query".to_string(), iq_val);
     }
 
     let rpc_request = serde_json::json!({
@@ -1720,7 +1832,7 @@ mod tests {
 
     #[test]
     fn load_workflow_parses_real_file() {
-        let path = Path::new(WORKFLOWS_DIR).join("coding-quick-dev.yaml");
+        let path = Path::new("config/workflows").join("coding-quick-dev.yaml");
         if path.exists() {
             let wf = load_workflow(&path).unwrap();
             assert_eq!(wf.name, "coding-quick-dev");
@@ -2006,5 +2118,84 @@ mod tests {
         let output = format!("{}\n\nbody here", long_title);
         let (title, _body) = extract_pr_fields(&output);
         assert!(title.len() <= 72);
+    }
+
+    // ── InjectionQuery construction (Story 21-1) ─────────────────────
+
+    /// Helper: construct InjectionQuery the same way execute_bmad_agent_step does.
+    fn build_bmad_injection_query(
+        config: &StepConfigDef,
+        template_vars: &HashMap<String, String>,
+    ) -> InjectionQuery {
+        let agent_name = extract_agent_name(config);
+        let mut query = InjectionQuery::new();
+        if agent_name.starts_with("bmad/") {
+            query.agent_name = Some(agent_name.clone());
+        }
+        query.workflow_name = template_vars.get("workflow_id").cloned();
+        query.step_type = Some("agent".to_string());
+        query
+    }
+
+    /// Helper: construct InjectionQuery the same way execute_direct_agent_step does.
+    fn build_direct_injection_query(template_vars: &HashMap<String, String>) -> InjectionQuery {
+        let mut query = InjectionQuery::new();
+        query.workflow_name = template_vars.get("workflow_id").cloned();
+        query.step_type = Some("agent".to_string());
+        query
+    }
+
+    #[test]
+    fn test_injection_query_bmad_agent_step() {
+        let config = StepConfigDef {
+            system_prompt: Some("You are bmad/architect. Design the system.".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+            retry: None,
+            working_dir: None,
+        };
+        let mut template_vars = HashMap::new();
+        template_vars.insert("workflow_id".to_string(), "coding-feature-dev".to_string());
+
+        let query = build_bmad_injection_query(&config, &template_vars);
+        assert_eq!(query.agent_name.as_deref(), Some("bmad/architect"));
+        assert_eq!(query.workflow_name.as_deref(), Some("coding-feature-dev"));
+        assert_eq!(query.step_type.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn test_injection_query_non_bmad_step() {
+        let mut template_vars = HashMap::new();
+        template_vars.insert("workflow_id".to_string(), "coding-quick-dev".to_string());
+
+        let query = build_direct_injection_query(&template_vars);
+        assert!(query.agent_name.is_none());
+        assert_eq!(query.workflow_name.as_deref(), Some("coding-quick-dev"));
+        assert_eq!(query.step_type.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn test_injection_query_missing_workflow_name() {
+        let config = StepConfigDef {
+            system_prompt: Some("You are bmad/dev. Write code.".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+            retry: None,
+            working_dir: None,
+        };
+        let template_vars = HashMap::new(); // empty — no workflow_id
+
+        let query = build_bmad_injection_query(&config, &template_vars);
+        assert_eq!(query.agent_name.as_deref(), Some("bmad/dev"));
+        assert!(query.workflow_name.is_none());
+        assert_eq!(query.step_type.as_deref(), Some("agent"));
     }
 }

@@ -82,7 +82,8 @@ fn has_cycle(adj: &HashMap<String, Vec<String>>) -> bool {
 }
 
 /// Validate that a workflow YAML file has required structure.
-pub fn validate_workflow_file(path: &Path) -> Result<ValidationResult, String> {
+/// `plugins_dir` is the directory where plugin binaries are located.
+pub fn validate_workflow_file(path: &Path, plugins_dir: &Path) -> Result<ValidationResult, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
 
@@ -157,11 +158,13 @@ pub fn validate_workflow_file(path: &Path) -> Result<ValidationResult, String> {
 
             // Verify executor plugin binary exists
             if let Some(executor) = &step.executor {
-                let plugin_path = format!("config/plugins/{}", executor);
-                if !Path::new(&plugin_path).exists() {
+                let plugin_path = plugins_dir.join(executor);
+                if !plugin_path.exists() {
                     issues.push(format!(
                         "{}: executor '{}' not found at {}",
-                        step_label, executor, plugin_path
+                        step_label,
+                        executor,
+                        plugin_path.display()
                     ));
                 }
             }
@@ -212,11 +215,12 @@ pub fn validate_workflow_file(path: &Path) -> Result<ValidationResult, String> {
     // Validate required plugin dependencies exist
     if let Some(requires) = &workflow.requires {
         for req in requires {
-            let plugin_path = format!("config/plugins/{}", req.plugin);
-            if !Path::new(&plugin_path).exists() {
+            let plugin_path = plugins_dir.join(&req.plugin);
+            if !plugin_path.exists() {
                 issues.push(format!(
                     "requires plugin '{}' but not found at {}",
-                    req.plugin, plugin_path
+                    req.plugin,
+                    plugin_path.display()
                 ));
             }
         }
@@ -252,7 +256,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(result.valid, "issues: {:?}", result.issues);
     }
 
@@ -263,7 +267,7 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "version: 1\nsteps:\n  - id: s1\n    type: function").unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result.issues.iter().any(|i| i.contains("name")));
     }
@@ -275,7 +279,7 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "name: test\nversion: 1").unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result.issues.iter().any(|i| i.contains("steps")));
     }
@@ -287,7 +291,7 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "name: test\n  bad indent: [").unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result.issues.iter().any(|i| i.contains("invalid YAML")));
     }
@@ -303,7 +307,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result.issues.iter().any(|i| i.contains("system_prompt")));
     }
@@ -315,7 +319,7 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "name: test\nversion: 1\nsteps: []").unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result.issues.iter().any(|i| i.contains("empty")));
     }
@@ -331,7 +335,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result.issues.iter().any(|i| i.contains("id")));
     }
@@ -347,7 +351,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result
             .issues
@@ -366,7 +370,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result
             .issues
@@ -385,7 +389,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result.issues.iter().any(|i| i.contains("cycle")));
     }
@@ -401,7 +405,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(!result.valid);
         assert!(result
             .issues
@@ -420,7 +424,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = validate_workflow_file(&path).unwrap();
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(result.valid, "issues: {:?}", result.issues);
     }
 }

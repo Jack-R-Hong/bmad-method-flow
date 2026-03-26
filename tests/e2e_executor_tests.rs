@@ -49,22 +49,14 @@ impl TestEnv {
         // Symlink mock-plugins → config/plugins
         let plugins_src = fixtures.join("mock-plugins");
         let plugins_dst = config_dir.join("plugins");
-        std::os::unix::fs::symlink(&plugins_src, &plugins_dst).unwrap_or_else(|e| {
-            panic!(
-                "symlink {:?} → {:?}: {}",
-                plugins_src, plugins_dst, e
-            )
-        });
+        std::os::unix::fs::symlink(&plugins_src, &plugins_dst)
+            .unwrap_or_else(|e| panic!("symlink {:?} → {:?}: {}", plugins_src, plugins_dst, e));
 
         // Symlink test workflows → config/workflows
         let workflows_src = fixtures.join("workflows");
         let workflows_dst = config_dir.join("workflows");
-        std::os::unix::fs::symlink(&workflows_src, &workflows_dst).unwrap_or_else(|e| {
-            panic!(
-                "symlink {:?} → {:?}: {}",
-                workflows_src, workflows_dst, e
-            )
-        });
+        std::os::unix::fs::symlink(&workflows_src, &workflows_dst)
+            .unwrap_or_else(|e| panic!("symlink {:?} → {:?}: {}", workflows_src, workflows_dst, e));
 
         Self { temp_dir }
     }
@@ -92,7 +84,8 @@ fn assert_step_status(result: &serde_json::Value, step_id: &str, expected: &str)
         .unwrap_or_else(|| panic!("step '{}' not found in result: {:?}", step_id, steps));
     let actual = step["status"].as_str().expect("step should have status");
     assert_eq!(
-        actual, expected,
+        actual,
+        expected,
         "step '{}': expected status '{}', got '{}'. Error: {:?}",
         step_id,
         expected,
@@ -145,8 +138,7 @@ fn function_only_template_substitution() {
     .expect("workflow should succeed");
 
     // step_a echoes "step_a output for {{input}}" which should be resolved
-    let preview = get_step_content_preview(&result, "step_a")
-        .expect("step_a should have content");
+    let preview = get_step_content_preview(&result, "step_a").expect("step_a should have content");
     assert!(
         preview.contains("my-feature"),
         "template {{{{input}}}} should be substituted in step_a output, got: {}",
@@ -205,16 +197,16 @@ fn template_vars_substituted_in_commands() {
 
     assert_eq!(result["status"].as_str(), Some("completed"));
 
-    let preview = get_step_content_preview(&result, "use_input")
-        .expect("use_input should have content");
+    let preview =
+        get_step_content_preview(&result, "use_input").expect("use_input should have content");
     assert!(
         preview.contains("add-login-feature"),
         "{{{{input}}}} not substituted: {}",
         preview
     );
 
-    let preview2 = get_step_content_preview(&result, "use_multi")
-        .expect("use_multi should have content");
+    let preview2 =
+        get_step_content_preview(&result, "use_multi").expect("use_multi should have content");
     assert!(
         preview2.contains("add-login-feature"),
         "{{{{input}}}} not substituted in second step: {}",
@@ -238,7 +230,10 @@ fn optional_step_failure_does_not_block() {
 
     // Overall status should not be "failed" since the failing step is optional
     let status = result["status"].as_str().unwrap();
-    assert_ne!(status, "failed", "optional failure should not cause overall failure");
+    assert_ne!(
+        status, "failed",
+        "optional failure should not cause overall failure"
+    );
 
     assert_step_status(&result, "step_ok", "success");
     assert_step_status(&result, "step_optional_fail", "failed");
@@ -326,11 +321,8 @@ fn missing_required_plugin_returns_error() {
 #[test]
 fn nonexistent_workflow_returns_error() {
     let env = TestEnv::new();
-    let result = plugin_coding_pack::executor::execute_workflow_in(
-        "does-not-exist",
-        "test",
-        env.base_dir(),
-    );
+    let result =
+        plugin_coding_pack::executor::execute_workflow_in("does-not-exist", "test", env.base_dir());
 
     assert!(result.is_err(), "should fail for nonexistent workflow");
 }
@@ -537,7 +529,10 @@ fn result_contains_expected_fields() {
     // Verify top-level fields
     assert!(result.get("workflow_id").is_some(), "missing workflow_id");
     assert!(result.get("status").is_some(), "missing status");
-    assert!(result.get("steps_completed").is_some(), "missing steps_completed");
+    assert!(
+        result.get("steps_completed").is_some(),
+        "missing steps_completed"
+    );
     assert!(result.get("steps_total").is_some(), "missing steps_total");
     assert!(result.get("steps").is_some(), "missing steps");
     assert!(
@@ -580,7 +575,11 @@ fn execution_time_is_recorded() {
     for step in steps {
         let step_ms = step["execution_time_ms"].as_u64().unwrap();
         // Each step should have some execution time (even if very fast)
-        assert!(step_ms < 30_000, "step took unreasonably long: {}ms", step_ms);
+        assert!(
+            step_ms < 30_000,
+            "step took unreasonably long: {}ms",
+            step_ms
+        );
     }
 }
 
@@ -676,8 +675,8 @@ fn function_step_resolves_command_not_executor() {
     assert_step_status(&result, "echo_step", "success");
 
     // The output should contain the echo text, proving echo was used (not bmad-method binary)
-    let preview = get_step_content_preview(&result, "echo_step")
-        .expect("echo_step should have content");
+    let preview =
+        get_step_content_preview(&result, "echo_step").expect("echo_step should have content");
     assert!(
         preview.contains("command-resolution-works"),
         "should have used echo command, not bmad-method binary: {}",
@@ -703,8 +702,8 @@ fn working_dir_applied_to_function_step() {
     assert_step_status(&result, "run_in_dir", "success");
 
     // pwd should output /tmp (the configured working_dir)
-    let preview = get_step_content_preview(&result, "run_in_dir")
-        .expect("run_in_dir should have content");
+    let preview =
+        get_step_content_preview(&result, "run_in_dir").expect("run_in_dir should have content");
     assert!(
         preview.contains("/tmp"),
         "working_dir should change cwd to /tmp, got: {}",

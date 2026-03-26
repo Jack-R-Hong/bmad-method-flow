@@ -1,8 +1,13 @@
+#[cfg(not(target_arch = "wasm32"))]
+pub mod config_injector;
 pub mod executor;
 pub mod pack;
 pub mod test_parser;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tool_provider;
 pub mod util;
 pub mod validator;
+pub mod workspace;
 
 use pulse_plugin_sdk::error::WitPluginError;
 use pulse_plugin_sdk::wit_traits::{DashboardExtensionPlugin, PluginLifecycle, StepExecutorPlugin};
@@ -13,6 +18,47 @@ use tracing::info;
 
 use pack::CodingPackInput;
 use util::is_executable;
+
+// ── Server-mode registration ───────────────────────────────────────────────
+
+/// Returns SDK-compatible plugin metadata.
+pub fn metadata() -> pulse_plugin_sdk::PluginMetadata {
+    pulse_plugin_sdk::PluginMetadata::new(
+        "plugin-coding-pack",
+        env!("CARGO_PKG_VERSION"),
+        pulse_plugin_sdk::API_VERSION,
+    )
+    .with_description(
+        "Coding pack orchestrator with BMAD agent injection and tool provider",
+    )
+}
+
+/// Registers plugin-coding-pack with Pulse's plugin registry (server mode).
+///
+/// Returns a `PluginRegistration` containing:
+/// - `HookPoint::ConfigInjector` — BmadAgentInjector for per-agent persona injection
+/// - `HookPoint::ToolProvider` — BmadToolProvider exposing pack operations as LLM tools
+///
+/// In server mode, Pulse's plugin-loader calls this function and merges the
+/// returned capabilities into the shared `PluginRegistry`. provider-claude-code
+/// receives that registry via `register_with_deps()` and can query our injector
+/// and tool provider at runtime.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn register() -> pulse_plugin_sdk::PluginRegistration {
+    use std::sync::Arc;
+
+    let manifest_path = std::path::PathBuf::from("_bmad/_config/agent-manifest.csv");
+    let injector = config_injector::BmadAgentInjector::new(&manifest_path);
+    let tool_prov = tool_provider::BmadToolProvider::new(workspace::WorkspaceConfig::resolve(None));
+
+    pulse_plugin_sdk::PluginRegistration::new(metadata())
+        .with_capability(pulse_plugin_sdk::HookPoint::ConfigInjector(Arc::new(
+            injector,
+        )))
+        .with_capability(pulse_plugin_sdk::HookPoint::ToolProvider(Arc::new(
+            tool_prov,
+        )))
+}
 
 /// Meta-plugin that orchestrates the coding plugin pack.
 ///
@@ -52,8 +98,9 @@ impl PluginLifecycle for CodingPackPlugin {
     }
 
     fn health_check(&self) -> bool {
-        let workflows_dir = std::path::Path::new("config/workflows");
-        let plugins_dir = std::path::Path::new("config/plugins");
+        let ws_config = workspace::WorkspaceConfig::default();
+        let workflows_dir = &ws_config.workflows_dir;
+        let plugins_dir = &ws_config.plugins_dir;
 
         let workflows_ok = workflows_dir.exists();
         let plugins_ok = plugins_dir.exists();
@@ -120,8 +167,17 @@ impl StepExecutorPlugin for CodingPackPlugin {
             )
         })?;
 
-        let pack_input: CodingPackInput = serde_json::from_value(input_val.clone())
+        let mut pack_input: CodingPackInput = serde_json::from_value(input_val.clone())
             .map_err(|e| WitPluginError::invalid_input(format!("invalid input: {e}")))?;
+
+        // Allow workspace_dir to be passed via task metadata
+        if pack_input.workspace_dir.is_none() {
+            if let Some(meta) = &task.metadata {
+                if let Some(ws) = meta.get("workspace_dir").and_then(|v| v.as_str()) {
+                    pack_input.workspace_dir = Some(ws.to_string());
+                }
+            }
+        }
 
         let start = std::time::Instant::now();
         let result = pack::execute_action(&pack_input)?;

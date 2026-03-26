@@ -1,8 +1,8 @@
 use crate::util::is_executable;
 use crate::validator;
+use crate::workspace::WorkspaceConfig;
 use pulse_plugin_sdk::error::WitPluginError;
 use serde::Deserialize;
-use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct CodingPackInput {
@@ -19,26 +19,42 @@ pub struct CodingPackInput {
     /// Data endpoint path for data-query action (set by Pulse proxy)
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// Optional workspace root directory override.
+    /// If not set, falls back to PULSE_WORKSPACE_DIR env var, then current directory.
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
 }
 
 /// Execute a pack-level action.
 pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError> {
+    let config = WorkspaceConfig::resolve(input.workspace_dir.as_deref());
+
     match input.action.as_str() {
-        "validate-pack" => to_json_string(validate_pack_value()),
-        "validate-workflows" => to_json_string(validate_workflows_value()),
-        "list-workflows" => to_json_string(list_workflows_value()),
-        "list-plugins" => to_json_string(list_plugins_value()),
-        "status" => to_json_string(pack_status_value()),
+        "validate-pack" => to_json_string(validate_pack_value(&config)),
+        "validate-workflows" => to_json_string(validate_workflows_value(&config)),
+        "list-workflows" => to_json_string(list_workflows_value(&config)),
+        "list-plugins" => to_json_string(list_plugins_value(&config)),
+        "status" => to_json_string(pack_status_value(&config)),
         "execute-workflow" => {
             let workflow_id = input.workflow_id.as_deref().ok_or_else(|| {
                 WitPluginError::invalid_input("execute-workflow requires 'workflow_id'")
             })?;
+            if !config.is_workflow_enabled(workflow_id) {
+                return Err(WitPluginError::not_found(format!(
+                    "Workflow '{}' is disabled in this workspace",
+                    workflow_id
+                )));
+            }
             let user_input = input.input.as_deref().unwrap_or("");
-            to_json_string(crate::executor::execute_workflow(workflow_id, user_input))
+            to_json_string(crate::executor::execute_workflow_with_config(
+                workflow_id,
+                user_input,
+                &config,
+            ))
         }
         "data-query" => {
             let endpoint = input.endpoint.as_deref().unwrap_or("");
-            execute_data_query(endpoint)
+            execute_data_query(endpoint, &config)
         }
         other => Err(WitPluginError::not_found(format!(
             "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query",
@@ -53,7 +69,7 @@ fn to_json_string(
     result.map(|v| serde_json::to_string_pretty(&v).unwrap_or_default())
 }
 
-fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
+fn validate_pack_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
     let mut issues = Vec::new();
     let mut ok_count = 0;
 
@@ -62,8 +78,8 @@ fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
     let optional_plugins = ["plugin-git-worktree", "plugin-memory"];
 
     for plugin in &required_plugins {
-        let path = format!("config/plugins/{}", plugin);
-        if Path::new(&path).exists() {
+        let path = config.plugins_dir.join(plugin);
+        if path.exists() {
             ok_count += 1;
         } else {
             issues.push(format!("MISSING required plugin: {}", plugin));
@@ -71,8 +87,8 @@ fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
     }
 
     for plugin in &optional_plugins {
-        let path = format!("config/plugins/{}", plugin);
-        if Path::new(&path).exists() {
+        let path = config.plugins_dir.join(plugin);
+        if path.exists() {
             ok_count += 1;
         } else {
             issues.push(format!(
@@ -83,9 +99,8 @@ fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
     }
 
     // Check workflow files
-    let workflow_dir = Path::new("config/workflows");
-    let workflow_count = if workflow_dir.exists() {
-        std::fs::read_dir(workflow_dir)
+    let workflow_count = if config.workflows_dir.exists() {
+        std::fs::read_dir(&config.workflows_dir)
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
@@ -94,7 +109,10 @@ fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
             })
             .unwrap_or(0)
     } else {
-        issues.push("MISSING config/workflows directory".to_string());
+        issues.push(format!(
+            "MISSING workflows directory: {}",
+            config.workflows_dir.display()
+        ));
         0
     };
 
@@ -106,20 +124,19 @@ fn validate_pack_value() -> Result<serde_json::Value, WitPluginError> {
     }))
 }
 
-fn validate_workflows_value() -> Result<serde_json::Value, WitPluginError> {
-    let workflow_dir = Path::new("config/workflows");
-    if !workflow_dir.exists() {
+fn validate_workflows_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    if !config.workflows_dir.exists() {
         return Ok(serde_json::json!({
             "valid": false,
             "results": [],
-            "issues": ["config/workflows directory not found"],
+            "issues": [format!("workflows directory not found: {}", config.workflows_dir.display())],
         }));
     }
 
     let mut results = Vec::new();
     let mut all_valid = true;
 
-    let mut entries: Vec<_> = std::fs::read_dir(workflow_dir)
+    let mut entries: Vec<_> = std::fs::read_dir(&config.workflows_dir)
         .map_err(|e| WitPluginError::internal(format!("cannot read workflows dir: {}", e)))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
@@ -128,7 +145,7 @@ fn validate_workflows_value() -> Result<serde_json::Value, WitPluginError> {
 
     for entry in entries {
         let path = entry.path();
-        match validator::validate_workflow_file(&path) {
+        match validator::validate_workflow_file(&path, &config.plugins_dir) {
             Ok(result) => {
                 if !result.valid {
                     all_valid = false;
@@ -157,17 +174,18 @@ fn validate_workflows_value() -> Result<serde_json::Value, WitPluginError> {
     }))
 }
 
-fn list_workflows_value() -> Result<serde_json::Value, WitPluginError> {
-    let workflow_dir = Path::new("config/workflows");
+fn list_workflows_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
     let mut workflows = Vec::new();
 
-    if workflow_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(workflow_dir) {
+    if config.workflows_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&config.workflows_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
                     if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                        workflows.push(name.to_string());
+                        if config.is_workflow_enabled(name) {
+                            workflows.push(name.to_string());
+                        }
                     }
                 }
             }
@@ -181,12 +199,11 @@ fn list_workflows_value() -> Result<serde_json::Value, WitPluginError> {
     }))
 }
 
-fn list_plugins_value() -> Result<serde_json::Value, WitPluginError> {
-    let plugins_dir = Path::new("config/plugins");
+fn list_plugins_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
     let mut plugins = Vec::new();
 
-    if plugins_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(plugins_dir) {
+    if config.plugins_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&config.plugins_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
@@ -209,25 +226,25 @@ fn list_plugins_value() -> Result<serde_json::Value, WitPluginError> {
     }))
 }
 
-fn pack_status_value() -> Result<serde_json::Value, WitPluginError> {
+fn pack_status_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
     Ok(serde_json::json!({
-        "validation": validate_pack_value()?,
-        "workflows": list_workflows_value()?,
-        "plugins": list_plugins_value()?,
+        "validation": validate_pack_value(config)?,
+        "workflows": list_workflows_value(config)?,
+        "plugins": list_plugins_value(config)?,
     }))
 }
 
 /// Handle data-query requests from dashboard proxy.
 /// Routes endpoint paths to internal data functions.
-fn execute_data_query(endpoint: &str) -> Result<String, WitPluginError> {
+fn execute_data_query(endpoint: &str, config: &WorkspaceConfig) -> Result<String, WitPluginError> {
     let endpoint = endpoint.trim_start_matches('/');
     let result = match endpoint {
-        "status" => pack_status_value()?,
-        "workflows/list" => list_workflows_detail_value()?,
+        "status" => pack_status_value(config)?,
+        "workflows/list" => list_workflows_detail_value(config)?,
         "agents/list" => list_agents_value()?,
         ep if ep.starts_with("workflows/") => {
             let id = ep.strip_prefix("workflows/").unwrap_or("");
-            get_workflow_detail_value(id)?
+            get_workflow_detail_value(id, config)?
         }
         _ => {
             return Err(WitPluginError::not_found(format!(
@@ -241,21 +258,27 @@ fn execute_data_query(endpoint: &str) -> Result<String, WitPluginError> {
 }
 
 /// Detailed workflow list for dashboard table view.
-fn list_workflows_detail_value() -> Result<serde_json::Value, WitPluginError> {
-    let workflow_dir = Path::new("config/workflows");
+fn list_workflows_detail_value(
+    config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
     let mut workflows = Vec::new();
 
-    if workflow_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(workflow_dir) {
+    if config.workflows_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&config.workflows_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+                    let id = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown");
+
+                    if !config.is_workflow_enabled(id) {
+                        continue;
+                    }
+
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(wf) = serde_yaml::from_str::<serde_json::Value>(&content) {
-                            let id = path
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("unknown");
                             let category = if id.starts_with("bootstrap") {
                                 "bootstrap"
                             } else {
@@ -303,8 +326,11 @@ fn list_agents_value() -> Result<serde_json::Value, WitPluginError> {
 }
 
 /// Single workflow detail for dashboard detail view.
-fn get_workflow_detail_value(workflow_id: &str) -> Result<serde_json::Value, WitPluginError> {
-    let path = Path::new("config/workflows").join(format!("{}.yaml", workflow_id));
+fn get_workflow_detail_value(
+    workflow_id: &str,
+    config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
+    let path = config.workflows_dir.join(format!("{}.yaml", workflow_id));
     if !path.exists() {
         return Err(WitPluginError::not_found(format!(
             "Workflow '{}' not found",
@@ -324,7 +350,11 @@ fn get_workflow_detail_value(workflow_id: &str) -> Result<serde_json::Value, Wit
         .unwrap_or_default();
     let step_pipeline: Vec<String> = steps
         .iter()
-        .filter_map(|s| s.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+        .filter_map(|s| {
+            s.get("id")
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
 
     let category = if workflow_id.starts_with("bootstrap") {
@@ -349,15 +379,20 @@ fn get_workflow_detail_value(workflow_id: &str) -> Result<serde_json::Value, Wit
 mod tests {
     use super::*;
 
-    #[test]
-    fn validate_pack_returns_valid_json() {
-        let input = CodingPackInput {
-            action: "validate-pack".to_string(),
+    fn test_input(action: &str) -> CodingPackInput {
+        CodingPackInput {
+            action: action.to_string(),
             target: None,
             workflow_id: None,
             input: None,
             endpoint: None,
-        };
+            workspace_dir: None,
+        }
+    }
+
+    #[test]
+    fn validate_pack_returns_valid_json() {
+        let input = test_input("validate-pack");
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.get("plugins_ok").is_some());
@@ -366,13 +401,7 @@ mod tests {
 
     #[test]
     fn validate_workflows_returns_valid_json() {
-        let input = CodingPackInput {
-            action: "validate-workflows".to_string(),
-            target: None,
-            workflow_id: None,
-            input: None,
-            endpoint: None,
-        };
+        let input = test_input("validate-workflows");
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.get("count").is_some());
@@ -381,13 +410,7 @@ mod tests {
 
     #[test]
     fn list_workflows_returns_valid_json() {
-        let input = CodingPackInput {
-            action: "list-workflows".to_string(),
-            target: None,
-            workflow_id: None,
-            input: None,
-            endpoint: None,
-        };
+        let input = test_input("list-workflows");
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.get("workflows").is_some());
@@ -396,13 +419,7 @@ mod tests {
 
     #[test]
     fn list_plugins_returns_valid_json() {
-        let input = CodingPackInput {
-            action: "list-plugins".to_string(),
-            target: None,
-            workflow_id: None,
-            input: None,
-            endpoint: None,
-        };
+        let input = test_input("list-plugins");
         let result = execute_action(&input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.get("plugins").is_some());
@@ -410,13 +427,7 @@ mod tests {
 
     #[test]
     fn unknown_action_returns_not_found() {
-        let input = CodingPackInput {
-            action: "does-not-exist".to_string(),
-            target: None,
-            workflow_id: None,
-            input: None,
-            endpoint: None,
-        };
+        let input = test_input("does-not-exist");
         let err = execute_action(&input).unwrap_err();
         assert_eq!(err.code, "not_found");
     }
