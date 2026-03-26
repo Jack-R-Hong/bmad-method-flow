@@ -7,7 +7,7 @@
 
 use pulse_plugin_sdk::types::injection::InjectionQuery;
 use pulse_plugin_sdk::types::llm::{ToolCall, ToolSensitivity};
-use pulse_plugin_sdk::{HookPoint, PluginRegistry};
+use pulse_plugin_sdk::{HookPoint, PluginRegistry, match_skills};
 
 // ── Registration structure ─────────────────────────────────────────────────
 
@@ -19,6 +19,7 @@ fn register_returns_config_injector_and_tool_provider() {
 
     let mut has_config_injector = false;
     let mut has_tool_provider = false;
+    let mut has_agent_def_provider = false;
 
     for cap in &registration.capabilities {
         match cap {
@@ -31,12 +32,17 @@ fn register_returns_config_injector_and_tool_provider() {
                 assert_eq!(p.provider_name(), "bmad-coding-pack");
                 has_tool_provider = true;
             }
+            HookPoint::AgentDefinitionProvider(a) => {
+                assert_eq!(a.provider_name(), "bmad-agent-registry");
+                has_agent_def_provider = true;
+            }
             _ => {}
         }
     }
 
     assert!(has_config_injector, "registration must include ConfigInjector");
     assert!(has_tool_provider, "registration must include ToolProvider");
+    assert!(has_agent_def_provider, "registration must include AgentDefinitionProvider");
 }
 
 #[test]
@@ -44,8 +50,8 @@ fn register_capabilities_count() {
     let registration = plugin_coding_pack::register();
     assert_eq!(
         registration.capabilities.len(),
-        2,
-        "should have exactly 2 capabilities: ConfigInjector + ToolProvider"
+        3,
+        "should have exactly 3 capabilities: ConfigInjector + ToolProvider + AgentDefinitionProvider"
     );
 }
 
@@ -411,6 +417,112 @@ fn executor_rpc_params_include_injection_query() {
         iq.get("agent_name").and_then(|v| v.as_str()),
         Some("bmad/qa")
     );
+}
+
+// ── AgentDefinitionProvider pipeline ──────────────────────────────────────
+
+#[test]
+fn registry_contains_bmad_agent_definition_provider() {
+    let registry = build_test_registry();
+
+    assert!(
+        registry.agent_definition_provider_count() >= 1,
+        "registry should have at least 1 agent definition provider, got {}",
+        registry.agent_definition_provider_count()
+    );
+}
+
+#[test]
+fn registry_collect_agents_returns_all_9_bmad_agents() {
+    let registry = build_test_registry();
+    let agents = registry.collect_agents(None);
+
+    let bmad_agents: Vec<_> = agents.iter().filter(|a| a.name.starts_with("bmad/")).collect();
+    assert_eq!(
+        bmad_agents.len(),
+        9,
+        "should have 9 BMAD agents, got {}",
+        bmad_agents.len()
+    );
+}
+
+#[test]
+fn registry_collect_agents_sorted_deterministic() {
+    let registry = build_test_registry();
+    let agents = registry.collect_agents(None);
+
+    let bmad_names: Vec<&str> = agents
+        .iter()
+        .filter(|a| a.name.starts_with("bmad/"))
+        .map(|a| a.name.as_str())
+        .collect();
+
+    let mut sorted = bmad_names.clone();
+    sorted.sort();
+    assert_eq!(bmad_names, sorted, "agents should be sorted alphabetically");
+}
+
+#[test]
+fn registry_get_agent_by_name() {
+    let registry = build_test_registry();
+
+    let architect = registry.get_agent("bmad/architect", None);
+    assert!(architect.is_some(), "bmad/architect should be found");
+    let a = architect.unwrap();
+    assert!(a.description.as_ref().unwrap().contains("Winston"));
+    assert!(a.system_prompt.is_some());
+    assert_eq!(a.model_tier.as_deref(), Some("balanced"));
+}
+
+#[test]
+fn registry_get_agent_not_found() {
+    let registry = build_test_registry();
+    assert!(registry.get_agent("bmad/nonexistent", None).is_none());
+    assert!(registry.get_agent("other/agent", None).is_none());
+}
+
+#[test]
+fn registry_agents_have_skills_for_routing() {
+    let registry = build_test_registry();
+    let agents = registry.collect_agents(None);
+
+    let bmad_agents: Vec<_> = agents.iter().filter(|a| a.name.starts_with("bmad/")).collect();
+
+    for agent in &bmad_agents {
+        assert!(
+            agent.skills.is_some() && !agent.skills.as_ref().unwrap().is_empty(),
+            "agent {} should have skills for routing",
+            agent.name
+        );
+    }
+}
+
+#[test]
+fn registry_skill_routing_finds_architect() {
+    let registry = build_test_registry();
+    let agents = registry.collect_agents(None);
+
+    let result = match_skills(
+        &["distributed systems".into(), "API design".into()],
+        &agents,
+        Some("balanced"),
+    );
+    assert!(result.is_some(), "should find an agent for distributed systems + API design");
+    assert_eq!(result.unwrap().name, "bmad/architect");
+}
+
+#[test]
+fn registry_skill_routing_finds_dev() {
+    let registry = build_test_registry();
+    let agents = registry.collect_agents(None);
+
+    let result = match_skills(
+        &["code implementation".into()],
+        &agents,
+        Some("balanced"),
+    );
+    assert!(result.is_some(), "should find an agent for code implementation");
+    assert_eq!(result.unwrap().name, "bmad/dev");
 }
 
 // ── Metadata ───────────────────────────────────────────────────────────────

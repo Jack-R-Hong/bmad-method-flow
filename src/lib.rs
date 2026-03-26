@@ -1,4 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
+pub mod agent_registry;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod config_injector;
 pub mod executor;
 pub mod pack;
@@ -38,6 +40,7 @@ pub fn metadata() -> pulse_plugin_sdk::PluginMetadata {
 /// Returns a `PluginRegistration` containing:
 /// - `HookPoint::ConfigInjector` — BmadAgentInjector for per-agent persona injection
 /// - `HookPoint::ToolProvider` — BmadToolProvider exposing pack operations as LLM tools
+/// - `HookPoint::AgentDefinitionProvider` — BmadAgentRegistry for agent discovery and skill routing
 ///
 /// In server mode, Pulse's plugin-loader calls this function and merges the
 /// returned capabilities into the shared `PluginRegistry`. provider-claude-code
@@ -50,6 +53,7 @@ pub fn register() -> pulse_plugin_sdk::PluginRegistration {
     let manifest_path = std::path::PathBuf::from("_bmad/_config/agent-manifest.csv");
     let injector = config_injector::BmadAgentInjector::new(&manifest_path);
     let tool_prov = tool_provider::BmadToolProvider::new(workspace::WorkspaceConfig::resolve(None));
+    let agent_reg = agent_registry::BmadAgentRegistry::new(&manifest_path);
 
     pulse_plugin_sdk::PluginRegistration::new(metadata())
         .with_capability(pulse_plugin_sdk::HookPoint::ConfigInjector(Arc::new(
@@ -58,6 +62,9 @@ pub fn register() -> pulse_plugin_sdk::PluginRegistration {
         .with_capability(pulse_plugin_sdk::HookPoint::ToolProvider(Arc::new(
             tool_prov,
         )))
+        .with_capability(pulse_plugin_sdk::HookPoint::AgentDefinitionProvider(
+            Arc::new(agent_reg),
+        ))
 }
 
 /// Meta-plugin that orchestrates the coding plugin pack.

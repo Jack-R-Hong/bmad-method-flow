@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use plugin_coding_pack::agent_registry::BmadAgentRegistry;
 use plugin_coding_pack::config_injector::BmadAgentInjector;
 use plugin_coding_pack::tool_provider::BmadToolProvider;
 use plugin_coding_pack::CodingPackPlugin;
@@ -15,9 +16,10 @@ fn main() {
     let tool_provider = BmadToolProvider::new(
         plugin_coding_pack::workspace::WorkspaceConfig::resolve(None),
     );
-    // Combined adapter: handles step-executor + dashboard-extension + config-injector + tool-provider methods
+    let agent_registry = BmadAgentRegistry::new(&manifest_path);
+    // Combined adapter: handles step-executor + dashboard-extension + config-injector + tool-provider + agent-definition methods
     pulse_plugin_sdk::dev_adapter::run_custom_stdio(move |method, params| {
-        dispatch_combined(&plugin, &injector, &tool_provider, method, params)
+        dispatch_combined(&plugin, &injector, &tool_provider, &agent_registry, method, params)
     });
 }
 
@@ -29,10 +31,12 @@ fn dispatch_combined(
     plugin: &CodingPackPlugin,
     injector: &BmadAgentInjector,
     tool_provider: &BmadToolProvider,
+    agent_registry: &BmadAgentRegistry,
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, pulse_plugin_sdk::dev_adapter::DispatchError> {
     use pulse_plugin_sdk::dev_adapter::DispatchError;
+    use pulse_plugin_sdk::traits::agent_definition::AgentDefinitionProvider;
     use pulse_plugin_sdk::traits::tool_provider::ToolProvider;
     use pulse_plugin_sdk::types::injection::InjectionQuery;
     use pulse_plugin_sdk::types::llm::ToolCall;
@@ -137,6 +141,34 @@ fn dispatch_combined(
                     .map_err(|e| DispatchError::Internal(e.to_string())),
                 Err(e) => Err(DispatchError::Internal(e.to_string())),
             }
+        }
+
+        // ── Agent definition provider ──
+        "agent-definition.provider-name" => {
+            let name = agent_registry.provider_name();
+            serde_json::to_value(name).map_err(|e| DispatchError::Internal(e.to_string()))
+        }
+        "agent-definition.list-agents" => {
+            let workspace = params
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let agents = agent_registry.list_agents(workspace.as_deref());
+            serde_json::to_value(agents).map_err(|e| DispatchError::Internal(e.to_string()))
+        }
+        "agent-definition.get-agent" => {
+            let name = params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    DispatchError::InvalidParams("'name' parameter required".to_string())
+                })?;
+            let workspace = params
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let agent = agent_registry.get_agent(name, workspace.as_deref());
+            serde_json::to_value(agent).map_err(|e| DispatchError::Internal(e.to_string()))
         }
 
         _ => Err(DispatchError::MethodNotFound(format!(

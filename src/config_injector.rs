@@ -215,7 +215,7 @@ impl ConfigInjector for BmadAgentInjector {
 }
 
 /// Split CSV content into logical rows, handling quoted fields that span newlines.
-fn split_csv_rows(content: &str) -> Vec<String> {
+pub fn split_csv_rows(content: &str) -> Vec<String> {
     let mut rows = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
@@ -256,7 +256,7 @@ fn split_csv_rows(content: &str) -> Vec<String> {
 }
 
 /// Parse a single CSV row, handling quoted fields that may contain commas.
-fn parse_csv_row(row: &str) -> Vec<String> {
+pub fn parse_csv_row(row: &str) -> Vec<String> {
     let mut fields = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
