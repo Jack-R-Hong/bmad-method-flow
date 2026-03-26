@@ -2,777 +2,740 @@
 stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
 lastStep: 8
 status: 'complete'
-completedAt: '2026-03-18'
-lastUpdated: '2026-03-21'
-addenda:
-  - 'Epic 6: Knowledge Graph Memory Plugin (2026-03-20)'
-  - 'In-Plugin Workflow Executor (2026-03-21)'
-  - 'Quality Gate Architecture (2026-03-21)'
+completedAt: '2026-03-23'
+lastUpdated: '2026-03-23'
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
-  - '../../pulse/architecture.md'
-  - '../../pulse/docs/index.md'
-  - '../../pulse/docs/project-overview.md'
-  - '../../pulse/docs/deep-dive-plugin-system.md'
-  - '../../pulse/docs/plugin-development-guide.md'
-  - '../../pulse/Cargo.toml'
-  - '../../pulse-plugin-test/Makefile'
-  - '../../pulse-plugin-test/config/pulse.yaml'
-  - '../../pulse-plugin-test/config/plugins/claude-code.yaml'
-  - '../../pulse-plugin-test/config/workflows/auto-dev-full.yaml'
-  - '../../pulse-plugin-test/config/workflows/auto-dev-implement.yaml'
-  - '../../pulse-plugin-test/config/workflows/auto-dev-review.yaml'
+  - '_bmad-output/planning-artifacts/architecture-v1.md'
+  - '_bmad-output/planning-artifacts/epics.md'
+  - 'docs/architecture.md'
+  - 'docs/project-overview.md'
+  - 'src/lib.rs'
+  - 'src/executor.rs'
+  - 'src/workspace.rs'
+  - 'src/pack.rs'
+  - 'src/validator.rs'
+  - '../../pulse/crates/pulse-plugin-sdk/src/traits/agent_definition.rs'
+  - '../../pulse/crates/pulse-plugin-sdk/src/traits/agent_mesh.rs'
+  - '../../pulse/crates/pulse-plugin-sdk/src/traits/llm_provider.rs'
+  - '../../pulse/crates/pulse-plugin-sdk/src/types/llm.rs'
+  - '../../pulse/crates/pulse-plugin-sdk/src/types/tools.rs'
+supersedes: '_bmad-output/planning-artifacts/architecture-v1.md'
 workflowType: 'architecture'
 project_name: 'bmad-method-flow'
 user_name: 'Jack'
-date: '2026-03-18'
+date: '2026-03-23'
 ---
 
-# Architecture Decision Document
+# Architecture Decision Document — SDK Integration & Agent Mesh
 
-_This document builds collaboratively through step-by-step discovery. Sections are appended as we work through each architectural decision together._
+_This document defines the architecture for integrating new pulse-plugin-sdk capabilities (agent definitions, agent mesh, tool calling, unified LLM types) and provider-claude-code agent mesh features into plugin-coding-pack. It supersedes architecture-v1.md for all affected modules. Breaking changes are expected._
 
 ## Project Context Analysis
 
 ### Requirements Overview
 
-**Functional Requirements:**
-45 functional requirements across 9 domains:
-- Task Submission & Orchestration (FR1-FR7): Workflow submission via CLI/HTTP, plugin dependency validation, DAG expansion and execution
-- Agentic Code Execution (FR8-FR12): Claude CLI spawning, structured JSON output, per-step parameter configuration, permission mode enforcement, health check
-- Session & Context Management (FR13-FR15): Session ID forwarding between steps, prior step output injection via `context_from`
-- Quality Assurance (FR16-FR19): Test execution as workflow steps, gate condition evaluation, downstream blocking, structured review verdicts
-- Git Operations (FR20-FR27): Commit, push, branch, PR creation (GitHub/GitLab), platform auto-detection, destructive operation refusal, structured diff output
-- Budget & Resource Control (FR28-FR31): Per-step budget caps, timeout escalation (SIGTERM -> SIGKILL), cost metadata in output, zero leaked processes
-- Workflow Composition (FR32-FR35): YAML-only pipeline creation, step library references, conditional execution, plugin dependency declarations
-- Agent Persona System (FR36-FR38): 12 BMAD agent personas as WASM step executors, agent-specific system prompts and parameters
-- Observability & Monitoring (FR39-FR42): Plugin health status, dashboard step progression, session history, commit attribution
+**Integration Scope:**
+This is a brownfield integration of upstream SDK and provider capabilities into an existing, working plugin. The plugin-coding-pack already has a functioning DAG executor, two-stage agent execution, quality gates, retry loops, and workspace configuration. The integration adds:
+
+1. **AgentDefinitionProvider** — register BMAD agents as `SdkAgentDefinition` for platform-wide discovery
+2. **Agent Mesh** — enable dynamic inter-agent invocation via MCP, replacing rigid DAG dependencies for certain workflows
+3. **Unified LLM types** — adopt `CompletionRequest`/`CompletionResponse` with `ResponseChoice::ToolCalls`
+4. **ToolExecutor** — async tool execution during LLM conversations
+5. **Multi-agent sessions** — `session` step type for deliberation (architecture review, code review)
+6. **agents.yaml generation** — generate agent mesh ACL configuration from BMAD persona definitions
+
+**Functional Requirements (new/modified):**
+
+- FR-SDK-1: Plugin implements `AgentDefinitionProvider` trait, exposing 9 BMAD agents via `list_agents()` and `get_agent(name)`
+- FR-SDK-2: Each BMAD agent maps to an `SdkAgentDefinition` with `name`, `description`, `system_prompt`, `model_tier`, `skills`, and `tools`
+- FR-SDK-3: Executor injects `agent_name`, `mcp_config`, and `env_vars` into provider-claude-code JSON-RPC parameters for agent mesh steps
+- FR-SDK-4: Executor sets `PULSE_AGENT_DEPTH` env var and enforces max depth 5 to prevent infinite agent recursion
+- FR-SDK-5: New `session` step type supports multi-agent deliberation with configurable `ActivationStrategy` and `ConvergenceStrategy`
+- FR-SDK-6: Workspace config resolves agent mesh settings from `config/config.yaml` (new `agent_mesh` section)
+- FR-SDK-7: Plugin generates `agents.yaml` from BMAD agent definitions with `can_invoke` and `can_respond_to` ACL fields
+- FR-SDK-8: Executor supports `CompletionRequest`/`CompletionResponse` types for future direct LLM invocation (alongside existing JSON-RPC)
+- FR-SDK-9: Agent steps can include `tools` in their config, forwarded as `ToolDef` to the LLM provider
+- FR-SDK-10: Plugin exposes `list_agents` and `invoke_agent` via MCP stdio JSON-RPC when operating in mesh mode
 
 **Non-Functional Requirements:**
-19 NFRs across 4 domains:
-- Performance (NFR1-5): Plugin startup <500ms, CLI spawn <1s, JSON parse <50ms, submission validation <200ms, git ops <10s
-- Security (NFR6-9): Tokens in host config only, workspace path enforcement, output sanitization
-- Reliability (NFR10-14): Process timeout enforcement, health check gating, deterministic gate evaluation, step failure isolation, WASM panic containment
-- Integration (NFR15-19): Claude CLI version compatibility, git 2.20+ compatibility, GitHub/GitLab API versions, SDK API version contract, workflow schema validation at submission
+
+- NFR-SDK-1: Agent mesh depth guard adds <1ms overhead per step
+- NFR-SDK-2: `agents.yaml` generation completes in <50ms for 9 agents
+- NFR-SDK-3: `AgentDefinitionProvider::list_agents()` returns in <1ms (in-memory data)
+- NFR-SDK-4: Session step convergence evaluation adds <10ms per turn
+- NFR-SDK-5: Breaking changes to existing executor types are acceptable; no backward compatibility required
 
 **Scale & Complexity:**
-- Primary domain: Rust plugin development (native + WASM) + YAML workflow configuration
-- Complexity level: High
-- Estimated architectural components: 4 plugins + 1 step library + 3+ workflow templates + integration test harness
+
+- Primary domain: Rust plugin extension — adding new traits, types, and execution paths to existing codebase
+- Complexity level: Medium-High — multiple new abstractions, MCP integration, ACL generation
+- Estimated new/modified modules: 4 new files, 3 modified files
 
 ### Technical Constraints & Dependencies
 
-- **Zero core modifications** — all integration through existing `plugin-api` and `pulse-plugin-sdk` hooks
-- **Two plugin patterns** — Pattern C (native, `plugin-api` traits) for `claude-code`; Pattern A/B (WASM, WIT bindings) for `git-ops`, `bmad-method`, `test-parser`
-- **External dependencies** — `claude` CLI in PATH, `git` 2.20+, GitHub/GitLab tokens in host config
-- **Rust toolchain** — Edition 2021, MSRV 1.85, `wasm32-wasip2` target for WASM plugins
-- **Existing infrastructure** — DFIR dispatch engine, SQLite board, git worktree workspace manager, `inventory`-based native plugin registration, `wasmtime 28.0` WASM runtime
-- **Workflow YAML engine** — Generic `WorkflowStep` with opaque `config: serde_json::Value`, `depends_on` DAG edges, `context_from` output injection, `run_if` conditional execution
+- **pulse-plugin-sdk**: New traits (`AgentDefinitionProvider`, `AgentMeshProvider`, `LlmProvider`, `ToolExecutor`) and types (`SdkAgentDefinition`, `SdkAgentMeshConfig`, `CompletionRequest`, `CompletionResponse`, `ChatMessage`, `ToolDef`, `ToolCall`, `ToolResult`, `ModelInfo`, `LlmProviderMeta`, `TokenUsage`) are available at `../../pulse/crates/pulse-plugin-sdk`
+- **provider-claude-code**: Must accept new config fields: `agent_name`, `mcp_config`, `env_vars`, `tools`. Assumed to already support or will be updated to support these (upstream dependency).
+- **No async runtime in main crate**: The plugin uses `std::process::Command` + `std::thread` for process management. `ToolExecutor` is an `async_trait` — the plugin will need to bridge sync/async or use a lightweight async runtime for tool execution.
+- **WASM target**: The `cdylib` output must remain WASM-compatible for the plugin loader. `async_trait` and `tokio` are only in dev-dependencies.
 
 ### Cross-Cutting Concerns Identified
 
-- **Process lifecycle management** — Spawn, monitor, timeout (SIGTERM -> 5s -> SIGKILL), cleanup for all CLI-spawning plugins
-- **Structured output contract** — Every plugin must produce `StepOutput` with `step_id`, `status`, `content`, `execution_time_ms`, `metadata` (including cost fields for LLM steps)
-- **Workspace path enforcement** — All plugins receive `workspace_path` via `Task` metadata and must use as `current_dir`
-- **Credential isolation** — Git tokens and Claude auth from host config only; never in YAML, step params, outputs, logs, or dashboard
-- **Error propagation** — Plugin errors flow through `PluginError` variants -> OnFailure hooks -> retry/escalation/abandon
-- **Config parsing** — Each plugin independently parses its opaque `serde_json::Value` config from workflow YAML
-- **Session continuity** — `session_id` from step output forwarded to downstream steps via `context_from` mechanism
-- **Budget enforcement** — Per-step `max_budget_usd` checked during execution; cost metadata reported in every LLM step output
+- **Agent identity propagation**: `agent_name` must flow from workflow step config through executor to provider-claude-code, and be set as `PULSE_AGENT_NAME` env var for child processes
+- **Depth guard enforcement**: `PULSE_AGENT_DEPTH` must be incremented before spawning any agent and checked at the boundary
+- **Config backward compatibility**: New `agent_mesh` section in `config/config.yaml` must be optional — existing configs without it must continue to work
+- **ACL consistency**: `agents.yaml` generation must produce consistent output from the same BMAD definitions (deterministic ordering)
+- **Session state**: Multi-agent sessions need state tracking across turns, but the executor is currently stateless per step
 
 ## Starter Template Evaluation
 
 ### Primary Technology Domain
 
-Rust plugin development (native + WASM) for the Pulse AI Workflow Orchestration Engine — brownfield extension of an existing 34-crate monorepo.
+Rust plugin development — brownfield extension of an existing WASM-compatible plugin crate.
 
 ### Starter Options Considered
 
-Not applicable. This is brownfield development extending an existing platform with well-defined plugin interfaces, build tooling, and reference implementations. No starter template is needed.
+Not applicable. This is an extension of an existing, working codebase (`plugin-coding-pack` v0.1.0). No starter template needed. The existing crate structure, build tooling, and dependency graph are established.
 
 ### Established Technical Foundations
 
 **Language & Runtime:**
 - Rust edition 2021, MSRV 1.85
-- Tokio 1.40 async runtime (full features)
-- TypeScript/YAML for workflow configuration only
-
-**Plugin SDK & Interfaces:**
-- Pattern C (native): `plugin-api` crate traits (`TaskExecutor`, `QualityCheck`, etc.) + `inventory`-based registration via `plugin_api::submit_bridged!`
-- Pattern A/B (WASM): `pulse-plugin-sdk` WIT bindings via `wit-bindgen 0.53`, `wasm32-wasip2` target, wasmtime 28.0 runtime
-- Dev mode: `DevAdapter::new(Plugin).serve_stdio()` for JSON-RPC over stdio iteration
+- `std::process::Command` + `std::thread` for process management (no async runtime in production)
+- `pulse-plugin-sdk` for all SDK traits and types
 
 **Build & Deployment:**
-- Cargo workspace (primary), Buck2 (optional)
-- Native plugins: `crate-type = ["cdylib"]`, exported `pulse_plugin_register` symbol
-- WASM plugins: `cargo build --target wasm32-wasip2`, loaded from `PULSE_PLUGIN_DIR`
-- Integration testing: `pulse-plugin-test` workspace with Makefile orchestration
+- `crate-type = ["cdylib", "rlib"]` for WASM + native
+- Binary target at `src/main.rs` for CLI/stdio adapter
+- Integration testing via `pulse-plugin-test` with WASM harness
 
 **Serialization & Config:**
-- serde 1.0 + serde_json for all plugin data types
-- serde_yaml 0.9 for workflow and plugin configuration
-- Opaque `serde_json::Value` for step config (parsed by each plugin independently)
-
-**Reference Implementations (to follow):**
-- Process spawning: `worker-function/executor.rs` (tokio::process::Command, timeout)
-- Process lifecycle: `mcp/client.rs` (child process management, shutdown)
-- WIT WASM plugin: `git-worktree/src/lib.rs` (wit_bindgen::generate!)
-- Native registration: `worker-function/lib.rs` (plugin_api::submit_bridged!)
-- Dashboard extension: `opencode/handlers.rs` (PluginExtension)
-
-**Note:** Each plugin in this suite creates a new crate following these established patterns. No project initialization story is needed — crate scaffolding follows standard `cargo new --lib` with workspace membership.
+- `serde` 1.0 + `serde_json` for all data types
+- `serde_yaml` 0.9 for workflow and workspace configuration
+- All config structs use `#[serde(default)]` for optional fields
 
 ## Core Architectural Decisions
 
 ### Decision Priority Analysis
 
 **Critical Decisions (Block Implementation):**
-1. Plugin repository structure — independent crates under `pulse-plugins/`
-2. git-ops as native plugin (Pattern C) for MVP
-3. claude-code v2 direct CLI invocation (no sidecar)
-4. Structured output contract with normalized content + metadata
+1. Agent definition registry — how BMAD agents are represented as `SdkAgentDefinition`
+2. Agent mesh injection — how executor passes mesh config to provider-claude-code
+3. Depth guard mechanism — how recursion is prevented in agent mesh
+4. `agents.yaml` generation — how ACL config is derived from BMAD agents
 
 **Important Decisions (Shape Architecture):**
-5. Zero shared crates — copy shared logic between plugins
-6. Trait-based process abstraction for testability
-7. Shared ProcessManager pattern (copied, not shared crate)
-8. Standardized cost metadata schema for LLM plugins
+5. Session step type — how multi-agent deliberation is orchestrated
+6. Unified LLM type adoption — how `CompletionRequest`/`CompletionResponse` integrate
+7. Tool calling support — how `ToolDef` flows to providers
 
-**Deferred Decisions (Post-MVP):**
-- git-ops WASM migration (when host capabilities support process spawning)
-- Step library YAML references (when Pulse engine supports `$ref`)
-- Workflow dry-run validation mode
+**Deferred Decisions (Post-Integration):**
+- Direct LLM invocation (bypassing JSON-RPC for in-process providers)
+- Cost tracking via `TokenUsage` and cost-tracker plugin integration
+- `LlmProviderMeta` registration for model routing
+- Multi-agent session persistence across workflow restarts
 
-### Plugin Repository & Crate Structure
+### Decision 1: BMAD Agent Registry as `AgentDefinitionProvider`
 
-- **Decision:** Independent crates under `pulse-plugins/`, no shared Cargo workspace
-- **Rationale:** Matches existing convention (`pulse-plugin-test/Makefile` already references `../pulse-plugins/*`). Independent versioning and build cycles per plugin.
-- **Structure:**
-  - `pulse-plugins/claude-code-v2/` — Native plugin (Pattern C)
-  - `pulse-plugins/git-ops/` — Native plugin (Pattern C) for MVP
-  - `pulse-plugins/bmad-method/` — WASM plugin (Pattern A/B), multi-crate
-  - `pulse-plugins/test-parser/` — WASM plugin (Pattern A/B)
-- **Affects:** All plugins, build pipeline, integration testing
+- **Decision:** Implement `AgentDefinitionProvider` as a new struct `BmadAgentRegistry` in `src/agents.rs` that returns hardcoded `SdkAgentDefinition` instances for all 9 BMAD agents
+- **Rationale:** The 9 BMAD agents (architect, dev, qa, pm, sm, tech-writer, ux-designer, analyst, quick-flow-solo-dev) have stable definitions. A static registry avoids YAML parsing at runtime and keeps agent definitions co-located with the plugin that owns them. Platform-wide agent discovery queries `AgentDefinitionProvider::list_agents()` which returns owned `Vec<SdkAgentDefinition>` — no lifetime complications.
+- **Agent mapping:**
 
-### git-ops Plugin Pattern
+| BMAD Agent | SDK Name | Skills | Model Tier |
+|---|---|---|---|
+| Winston (Architect) | `bmad/architect` | `["architecture", "system-design", "rust"]` | `smart` |
+| Amelia (Developer) | `bmad/developer` | `["coding", "rust", "implementation"]` | `balanced` |
+| Quinn (QA) | `bmad/qa` | `["testing", "code-review", "quality"]` | `balanced` |
+| Bob (PM) | `bmad/pm` | `["planning", "requirements", "prioritization"]` | `balanced` |
+| John (SM) | `bmad/sm` | `["agile", "process", "coordination"]` | `fast` |
+| Sally (Tech Writer) | `bmad/tech-writer` | `["documentation", "technical-writing"]` | `fast` |
+| Mary (UX Designer) | `bmad/ux-designer` | `["ux", "design", "accessibility"]` | `balanced` |
+| Paige (Analyst) | `bmad/analyst` | `["analysis", "data", "research"]` | `balanced` |
+| Barry (Quick Dev) | `bmad/quick-dev` | `["coding", "rust", "rapid-prototyping"]` | `fast` |
 
-- **Decision:** Native plugin (Pattern C) using `plugin-api` traits for MVP
-- **Rationale:** WASM sandbox cannot spawn child processes. git-ops needs `git` CLI access for commit, push, branch operations and HTTP for GitHub/GitLab API calls. Native avoids host capability extensions.
-- **Migration path:** When Pulse adds `git-command` and `http-request` WIT host imports, migrate to WASM for sandbox security.
-- **Affects:** git-ops build target, testing approach, deployment model
+- **Affects:** `src/agents.rs` (new), `src/lib.rs` (implement trait on `CodingPackPlugin` or expose registry)
 
-### claude-code v2 Process Architecture
+### Decision 2: Agent Mesh Config Injection into Provider-Claude-Code
 
-- **CLI Invocation:** Direct `tokio::process::Command` per step, spawning `claude --output-format json --session-id {id}`. No sidecar HTTP service.
-- **Rationale:** Simpler lifecycle, matches PRD spec, `--session-id` flag handles session continuity natively. Sidecar adds operational overhead without clear benefit for step-per-process model.
-- **Timeout Escalation:** SIGTERM -> 5s grace period -> SIGKILL, implemented in a `ProcessManager` struct.
-- **Session Continuity:** `session_id` stored in `StepOutput.metadata` JSON. Downstream steps read via `context_from` mechanism. No schema changes to `StepOutput` or `StepConfig`.
-- **Affects:** claude-code v2 implementation, workflow session chaining
-
-### Shared Code Strategy
-
-- **Decision:** Zero shared crates. Copy shared patterns (ProcessManager, config parsing) between plugins that need them.
-- **Rationale:** Only 2 native plugins share process management (~100 lines). WASM plugins don't use it. Independent crates avoid coupling and simplify versioning.
-- **Affects:** claude-code v2, git-ops
-
-### Structured Output Contract
-
-- **Content field:** Normalized human-readable response text (CLI wrapper stripped)
-- **Metadata field:** Machine-parseable JSON with operation-specific data
-
-**LLM plugin metadata schema (claude-code):**
+- **Decision:** When a workflow step has `mesh_enabled: true` in its config, the executor enriches the JSON-RPC `parameters` object with three new fields: `agent_name` (string), `mcp_config` (JSON object defining MCP servers for agent mesh), and `env_vars` (key-value pairs including `PULSE_AGENT_DEPTH`)
+- **Rationale:** provider-claude-code already accepts an opaque `parameters` map. Adding fields to this map is the least-invasive integration path. provider-claude-code is expected to pass `agent_name` through to the Claude CLI's `--agent-name` flag (or equivalent), inject `mcp_config` as additional MCP server definitions, and set `env_vars` on the spawned child process.
+- **MCP config shape:**
 ```json
 {
-  "session_id": "ses_abc123",
-  "model": "claude-sonnet-4-20250514",
-  "cost_usd": 0.0142,
-  "input_tokens": 1250,
-  "output_tokens": 830,
-  "duration_ms": 4200
+  "agent_name": "bmad/architect",
+  "mcp_config": {
+    "mcpServers": {
+      "pulse-agents": {
+        "command": "plugin-coding-pack",
+        "args": ["--mcp-mode"],
+        "env": {
+          "PULSE_AGENT_DEPTH": "2"
+        }
+      }
+    }
+  },
+  "env_vars": {
+    "PULSE_AGENT_DEPTH": "2",
+    "PULSE_AGENT_NAME": "bmad/architect"
+  }
 }
 ```
+- **Affects:** `src/executor.rs` (agent step execution), `src/workspace.rs` (mesh config resolution)
 
-**Git plugin metadata schema (git-ops):**
-```json
-{
-  "commit_sha": "abc1234",
-  "files_changed": 3,
-  "branch": "feature/auth"
+### Decision 3: Depth Guard via Environment Variable
+
+- **Decision:** The executor reads `PULSE_AGENT_DEPTH` from the environment (defaulting to 0), increments it by 1, and passes the incremented value to child processes. If the incremented value exceeds `max_depth` (default 5, configurable via workspace config), the step fails immediately with `WitPluginError::invalid_input("agent mesh depth limit exceeded")`.
+- **Rationale:** Environment variable propagation is the simplest cross-process mechanism. It works whether agents are invoked via JSON-RPC, MCP, or direct process spawning. The check is O(1) — a single env var read + integer comparison at step start.
+- **Implementation:**
+```rust
+fn check_depth_guard(config: &WorkspaceConfig) -> Result<u32, WitPluginError> {
+    let current: u32 = std::env::var("PULSE_AGENT_DEPTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let next = current + 1;
+    let max = config.agent_mesh.as_ref()
+        .map(|m| m.max_depth)
+        .unwrap_or(5);
+    if next > max {
+        return Err(WitPluginError::invalid_input(
+            format!("agent mesh depth limit exceeded: {} > {}", next, max)
+        ));
+    }
+    Ok(next)
 }
 ```
+- **Affects:** `src/executor.rs` (depth check before agent steps), `src/workspace.rs` (max_depth config)
 
-**Non-LLM plugins** omit cost fields entirely.
-- **Affects:** All plugins, budget tracking, downstream step parsing, dashboard display
+### Decision 4: `agents.yaml` Generation from BMAD Definitions
 
-### Error Handling & Recovery
+- **Decision:** Add a new action `generate-agents-yaml` to `src/pack.rs` that reads the `BmadAgentRegistry`, generates an `agents.yaml` file conforming to provider-claude-code's expected schema, and writes it to `config/agents.yaml`.
+- **Rationale:** The ACL configuration for agent mesh (`can_invoke`, `can_respond_to`, `model`, `max_turns`, `max_budget_usd`, `timeout_secs`, `allowed_tools`) should be derived from the authoritative BMAD agent definitions rather than manually maintained. Generated config prevents drift between the plugin's agent registry and the mesh ACL.
+- **Default ACL rules:**
+  - All agents can invoke `bmad/developer` (the implementation agent)
+  - `bmad/architect` can invoke `bmad/analyst`, `bmad/ux-designer`
+  - `bmad/qa` can invoke `bmad/developer` (for fix requests)
+  - `bmad/quick-dev` has `can_invoke: []` (self-contained, no mesh)
+  - All agents can respond to `bmad/pm` and `bmad/sm` (coordination agents)
+- **Generated schema:**
+```yaml
+agents:
+  bmad/architect:
+    description: "Winston — Senior Solutions Architect"
+    model: "claude-sonnet-4-20250514"
+    max_turns: 10
+    max_budget_usd: 2.0
+    timeout_secs: 600
+    can_invoke:
+      - bmad/developer
+      - bmad/analyst
+      - bmad/ux-designer
+    can_respond_to:
+      - bmad/pm
+      - bmad/sm
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+  # ... (other agents follow same pattern)
+```
+- **Affects:** `src/pack.rs` (new action), `src/agents.rs` (ACL definitions)
 
-- **Error mapping:** CLI not found -> `NotFound`, bad config -> `Configuration`, non-zero exit -> `Execution` (stderr in message), timeout -> `Execution` with `"timed out"` message prefix (note: `plugin_api::PluginError` has no `Timeout` variant; available constructors are `execution`, `not_found`, `invalid_input`, `unauthorized`, `compatibility`, `version_mismatch`, `not_implemented`)
-- **Credential sanitization:** Git tokens and auth credentials NEVER appear in error messages
-- **Retry semantics:** Plugins are stateless and idempotent. No internal retry loops. Retry policy managed by dispatch engine via workflow `OnFailure` hooks.
-- **Partial failure:** Report `Execution` error describing what succeeded. No rollback — workflow `OnFailure` handler decides recovery.
-- **Affects:** All plugins, workflow error handling, observability
+### Decision 5: `session` Step Type for Multi-Agent Deliberation
 
-### Testing Strategy
+- **Decision:** Add a new step type `session` to the executor that orchestrates a multi-turn conversation between 2+ agents. The session runs for a configurable number of turns or until a convergence condition is met.
+- **Rationale:** Architecture reviews and code reviews benefit from adversarial multi-agent deliberation (architect vs QA, reviewer vs developer). The current `agent` step type is single-agent, single-turn. A `session` step type enables structured debates where each agent sees the full conversation history.
+- **Session config in workflow YAML:**
+```yaml
+- id: architecture_review
+  type: session
+  config:
+    participants:
+      - agent: bmad/architect
+        activation: every_turn
+      - agent: bmad/qa
+        activation: every_turn
+    convergence:
+      strategy: fixed_turns
+      max_turns: 4
+    system_prompt: "Review the proposed architecture. Debate trade-offs."
+    context_from: [plan_step]
+```
+- **Activation strategies (from SDK):**
+  - `every_turn` — agent speaks every turn (default)
+  - `when_mentioned` — agent speaks only when @mentioned
+  - `on_tag` — agent speaks when a topic tag matches
+  - `keyword_match` — agent speaks when keywords appear
+- **Convergence strategies:**
+  - `fixed_turns` — stop after N turns (default: 4)
+  - `unanimous` — stop when all agents agree on verdict
+  - `stagnation` — stop when no new points are raised for N turns
+- **Implementation:** Each turn calls provider-claude-code with the full conversation history as `ChatMessage` array. The executor assembles messages, evaluates activation, checks convergence, and produces a final summary.
+- **Affects:** `src/executor.rs` (new `execute_session_step()`), `src/session.rs` (new module for session logic)
 
-- **Unit testing:** Trait-based process abstraction (`CommandRunner` trait). Production uses `TokioCommandRunner`, tests use `MockCommandRunner` with canned JSON/CLI responses. Applied to both `claude-code` and `git-ops`.
-- **Integration testing:** `pulse-plugin-test` workspace with Makefile orchestration. Real workflows against real plugins with real external dependencies.
-- **YAML validation:** Schema validation via `serde_yaml` deserialization into `WorkflowStep` structs at submission time (handled by Pulse engine).
-- **Affects:** All plugins, CI pipeline, test infrastructure
+### Decision 6: Unified LLM Type Adoption
 
-### Workflow Template Architecture
+- **Decision:** Add `CompletionRequest`, `CompletionResponse`, `ChatMessage`, `TokenUsage`, `ResponseChoice`, `ToolDef`, and `ToolCall` types from `pulse_plugin_sdk::types::llm` as re-exports in the plugin. The executor uses these types internally for building LLM requests and parsing responses, but continues to communicate with provider-claude-code via JSON-RPC (which serializes these types as JSON).
+- **Rationale:** The SDK types provide compile-time type safety for LLM interactions. Using them internally prevents mismatched field names and ensures compatibility with future direct LLM invocation (when the executor bypasses JSON-RPC to call `LlmProvider::complete()` directly). The JSON-RPC transport serializes/deserializes these types transparently via serde.
+- **Migration path:** Phase 1 (this integration) uses SDK types for internal construction but serializes to JSON-RPC. Phase 2 (future) adds direct `LlmProvider::complete()` calls for in-process providers.
+- **Affects:** `src/executor.rs` (request construction), `Cargo.toml` (SDK types already available via `pulse-plugin-sdk`)
 
-- **Step organization:** Inline step definitions in self-contained YAML files (MVP). No step library references.
-- **Conditional execution:** Handled by Pulse engine's `run_if` field on `WorkflowStep`. Plugins do not implement conditional logic.
-- **Plugin dependency:** Declared via step `type` + `config.executor` fields. Engine validates at submission time.
-- **Affects:** Workflow template design, user documentation
+### Decision 7: Tool Calling Support via Config
+
+- **Decision:** Workflow step config gains an optional `tools` field (array of tool definitions). When present, the executor includes these as `ToolDef` objects in the JSON-RPC parameters, enabling provider-claude-code to expose them to the LLM as callable functions.
+- **Rationale:** Tool calling is a first-class LLM capability. Workflow designers should be able to specify which tools an agent step can use. The executor does not execute tools itself — it passes tool definitions to the provider, which manages the tool call loop.
+- **Workflow YAML example:**
+```yaml
+- id: implement
+  type: agent
+  executor: bmad-method
+  config:
+    system_prompt: "bmad/developer — implement the feature"
+    tools:
+      - name: "run_tests"
+        description: "Run the project test suite"
+        parameters: { "type": "object", "properties": {} }
+      - name: "read_file"
+        description: "Read a file from the workspace"
+        parameters: { "type": "object", "properties": { "path": { "type": "string" } } }
+```
+- **Affects:** `src/executor.rs` (tool field forwarding), workflow YAML schemas
 
 ### Decision Impact Analysis
 
 **Implementation Sequence:**
-1. claude-code v2 (highest complexity, most dependencies downstream)
-2. git-ops (reuses ProcessManager pattern from claude-code)
-3. test-parser (WASM, independent)
-4. bmad-method (WASM, depends on claude-code for downstream execution)
-5. Workflow templates (compose all plugins)
+1. `src/agents.rs` — Agent registry (Decision 1) — foundational, no dependencies
+2. `src/workspace.rs` — Agent mesh config (Decision 2 partial) — extends existing module
+3. `src/executor.rs` — Depth guard (Decision 3) + mesh injection (Decision 2) + tool forwarding (Decision 7) — modifies existing execution paths
+4. `src/session.rs` — Session step type (Decision 5) — new module, depends on executor
+5. `src/pack.rs` — `generate-agents-yaml` action (Decision 4) — depends on agent registry
+6. SDK type adoption (Decision 6) — can be done incrementally alongside other changes
 
 **Cross-Component Dependencies:**
-- git-ops reuses ProcessManager pattern from claude-code (copy, not shared crate)
-- bmad-method output feeds claude-code steps via `context_from`
-- Workflow templates depend on all 4 plugins being registered
-- Integration tests depend on all plugins + Pulse engine running
+- `agents.rs` is consumed by `pack.rs` (YAML generation), `executor.rs` (agent lookup), and `lib.rs` (trait impl)
+- `workspace.rs` mesh config is consumed by `executor.rs` (depth guard, mesh injection)
+- `session.rs` depends on `executor.rs` internal functions (agent step execution, template substitution)
+- All changes depend on `pulse-plugin-sdk` new types being available at compile time
 
 ## Implementation Patterns & Consistency Rules
 
 ### Pattern Categories Defined
 
-**6 critical conflict points identified** where AI agents implementing different plugins could make incompatible choices.
+**5 critical conflict points identified** where implementation choices must be consistent to avoid integration failures.
 
-### Crate Internal Structure
+### Agent Definition Pattern
 
-All plugins follow a flat module layout under `src/`:
-
-```
-src/
-  lib.rs          # Crate root: pub mod declarations, plugin registration, re-exports
-  config.rs       # Plugin config struct + serde deserialization from Value
-  executor.rs     # TaskExecutor trait implementation (core execute logic)
-  process.rs      # ProcessManager (native plugins only, copied per plugin)
-  output.rs       # StepOutput construction + metadata serialization helpers
-  error.rs        # Plugin-specific error helpers (optional, if beyond PluginError)
-tests/
-  integration_test.rs   # Integration tests against real CLI/binaries
-  config_parse_test.rs  # Tests config deserialization edge cases
-  session_chain_test.rs # Tests session_id forwarding
-```
-
-**Rules:**
-- No nested `mod.rs` modules (flat `src/*.rs` only)
-- `lib.rs` is registration + re-exports only — no business logic
-- One file per responsibility, named by what it does
-- `#[cfg(test)] mod tests` for unit tests inline at bottom of each file
-- `tests/` directory for integration tests requiring external deps
-
-**WASM plugins** (`bmad-method`, `test-parser`) omit `process.rs` and use `wit/` directory for WIT definitions:
-
-```
-src/
-  lib.rs          # wit_bindgen::generate! + trait implementation
-  config.rs       # Config parsing
-  personas.rs     # (bmad-method only) Agent persona definitions
-wit/
-  *.wit           # WIT interface definitions
-```
-
-### Config Deserialization Pattern
-
-All plugins deserialize `StepConfig.config` using **typed structs with `serde_json::from_value`**. No hand-parsing `.get()` chains.
+All BMAD agents are defined using a consistent builder pattern in `src/agents.rs`:
 
 ```rust
-use serde::Deserialize;
+use pulse_plugin_sdk::traits::agent_definition::SdkAgentDefinition;
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClaudeCodeConfig {
-    pub executor: String,
-    pub model_tier: Option<String>,
-    pub system_prompt: Option<String>,
-    pub user_prompt_template: String,
-    #[serde(default)]
-    pub allowed_tools: Vec<String>,
-    pub permission_mode: Option<String>,
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub context_from: Vec<String>,
-    pub max_budget_usd: Option<f64>,
-}
-
-impl ClaudeCodeConfig {
-    pub fn from_step_config(value: &serde_json::Value) -> Result<Self, PluginError> {
-        serde_json::from_value(value.clone())
-            .map_err(|e| PluginError::configuration(&format!("Invalid config: {e}")))
+pub fn bmad_architect() -> SdkAgentDefinition {
+    SdkAgentDefinition {
+        name: "bmad/architect".to_string(),
+        description: Some("Winston — Senior Solutions Architect. Designs system architecture, evaluates trade-offs, and ensures technical coherence.".to_string()),
+        system_prompt: Some(ARCHITECT_SYSTEM_PROMPT.to_string()),
+        model_tier: Some("smart".to_string()),
+        model: None, // resolved at runtime via workspace config
+        tools: Some(vec!["Read".into(), "Glob".into(), "Grep".into(), "Bash".into()]),
+        skills: Some(vec!["architecture".into(), "system-design".into(), "rust".into()]),
+        max_tokens: Some(8192),
+        temperature: Some(0.3),
+        max_tool_rounds: None,
     }
 }
 ```
 
 **Rules:**
-- `#[serde(deny_unknown_fields)]` on all config structs — fail fast on typos
-- Constructor method named `from_step_config(value: &Value) -> Result<Self, PluginError>`
-- Map serde errors to `PluginError::configuration`
-- All optional fields use `Option<T>`, never default sentinel values
-- `#[serde(default)]` only for `Vec<T>` fields (empty vec default)
+- Agent names use `bmad/` prefix followed by kebab-case role name
+- `description` always includes the persona name and a one-line role summary
+- `model` is always `None` — runtime resolution via workspace defaults or workflow config
+- `model_tier` maps to the agent's typical complexity needs (`smart`, `balanced`, `fast`)
+- `skills` are lowercase kebab-case tags used by `match_skills()`
+- `tools` lists Claude Code tool names the agent is allowed to use
+- System prompts are defined as constants in `src/agents.rs` (not inline strings)
 
-### StepOutput Metadata Conventions
+### Workspace Config Extension Pattern
 
-All metadata JSON uses **`snake_case`** field names. No camelCase, no kebab-case.
-
-**Mandatory fields (all plugins):**
-```json
-{
-  "plugin_name": "claude-code",
-  "plugin_version": "2.0.0"
-}
-```
-
-**LLM plugin additional fields (claude-code, bmad-method via claude):**
-```json
-{
-  "session_id": "ses_abc123",
-  "model": "claude-sonnet-4-20250514",
-  "cost_usd": 0.0142,
-  "input_tokens": 1250,
-  "output_tokens": 830,
-  "duration_ms": 4200
-}
-```
-
-**Git plugin additional fields (git-ops):**
-```json
-{
-  "operation": "commit",
-  "commit_sha": "abc1234",
-  "files_changed": 3,
-  "branch": "feature/auth"
-}
-```
-
-**Test plugin additional fields (test-parser):**
-```json
-{
-  "framework": "cargo-test",
-  "tests_passed": 42,
-  "tests_failed": 1,
-  "tests_skipped": 3
-}
-```
-
-**Rules:**
-- All field names `snake_case`
-- Numeric values as numbers, not strings
-- Booleans as `true`/`false`, not `1`/`0`
-- Absent optional fields omitted entirely (not `null`)
-- `plugin_name` and `plugin_version` always present
-
-### Logging Conventions
-
-All plugins use `tracing` with **structured fields**, not string interpolation.
+New config sections are added as optional fields with `#[serde(default)]`:
 
 ```rust
-// CORRECT — structured fields
-tracing::info!(plugin = "claude-code", step_id = %step_id, "spawning CLI process");
-tracing::debug!(plugin = "claude-code", session_id = %sid, model = %model, "session resumed");
-tracing::warn!(plugin = "claude-code", step_id = %step_id, elapsed_ms = elapsed, "approaching timeout");
-tracing::error!(plugin = "claude-code", step_id = %step_id, exit_code = code, "process failed");
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AgentMeshSettings {
+    /// Whether agent mesh is enabled for this workspace
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum recursion depth (default: 5)
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u32,
+    /// Path to agents.yaml (default: "config/agents.yaml")
+    #[serde(default)]
+    pub agents_yaml_path: Option<String>,
+}
 
-// WRONG — string interpolation
-tracing::info!("claude-code: spawning CLI for step {}", step_id);
-tracing::error!("Process failed with code {}", code);
+fn default_max_depth() -> u32 { 5 }
 ```
 
 **Rules:**
-- `plugin` field always present, set to plugin crate name
-- `step_id` field on all per-step log lines
-- Log levels:
-  - `error!` — operation failed, will return `PluginError`
-  - `warn!` — degraded but continuing (approaching timeout, retryable failure)
-  - `info!` — significant lifecycle events (process spawned, step complete, health check)
-  - `debug!` — detailed operational data (config parsed, output received, session ID)
-  - `trace!` — raw data dumps (full CLI output, raw JSON)
-- **NEVER** log credentials, tokens, or API keys at any level
-- **NEVER** log full `StepOutput.content` above `trace!` level (could be large)
+- All new config fields are optional with sensible defaults
+- Existing `config/config.yaml` files without the new section continue to work unchanged
+- New sections are documented with inline YAML comments in examples
+- Config structs always derive `Debug, Clone, Default, Deserialize`
+- No `#[serde(deny_unknown_fields)]` on workspace config — forward-compatible parsing
 
-### Test Organization
+### Session Step Execution Pattern
 
-**Unit tests:** Inline `#[cfg(test)] mod tests` at the bottom of each source file.
+Session steps follow a turn-based loop pattern:
 
 ```rust
-// src/executor.rs
-pub struct ClaudeExecutor { /* ... */ }
+fn execute_session_step(
+    step: &StepDef,
+    outputs: &HashMap<String, StepOutput>,
+    template_vars: &HashMap<String, String>,
+    plugins_dir: &Path,
+    ws_config: &WorkspaceConfig,
+) -> Result<(StepOutput, Option<String>), WitPluginError> {
+    let session_config = parse_session_config(step)?;
+    let mut conversation: Vec<ChatMessage> = Vec::new();
+    let mut turn = 0;
 
-impl TaskExecutor for ClaudeExecutor { /* ... */ }
+    // Initial context injection
+    let context = assemble_context(step, outputs);
+    if !context.is_empty() {
+        conversation.push(ChatMessage::user(context));
+    }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    loop {
+        turn += 1;
+        for participant in &session_config.participants {
+            if !should_activate(participant, turn, &conversation) {
+                continue;
+            }
+            let response = call_agent_in_session(
+                participant, &conversation, template_vars, plugins_dir,
+            )?;
+            conversation.push(ChatMessage::assistant(response));
+        }
+        if check_convergence(&session_config.convergence, turn, &conversation) {
+            break;
+        }
+    }
 
-    #[tokio::test]
-    async fn test_execute_returns_structured_output() { /* ... */ }
-
-    #[tokio::test]
-    async fn test_execute_timeout_sends_sigterm() { /* ... */ }
+    // Produce summary from final conversation state
+    build_session_output(step, &conversation, turn)
 }
 ```
 
-**Integration tests:** `tests/` directory, one file per test scenario.
-
 **Rules:**
-- Test function naming: `test_{method}_{scenario}` (e.g., `test_execute_returns_structured_output`)
-- Mock struct naming: `Mock{TraitName}` (e.g., `MockCommandRunner`)
-- No `#[ignore]` without a comment explaining why
-- Integration tests requiring external deps (`claude`, `git`) documented in test file header comment
+- Session conversation history is maintained as `Vec<ChatMessage>` (SDK type)
+- Each agent turn is a separate provider-claude-code call with full history
+- Convergence check happens after each complete round (all participants spoke)
+- Session output includes the full conversation transcript and a summary
+- Depth guard is checked once at session start, not per turn
 
-### ProcessManager Pattern
+### JSON-RPC Parameter Extension Pattern
 
-Both `claude-code` and `git-ops` copy this pattern. The struct and API must be identical to avoid divergence:
+When adding new fields to JSON-RPC parameters, follow this pattern:
 
 ```rust
-pub struct ProcessManager {
-    timeout: Duration,
-    grace_period: Duration,  // default 5s
+// Always add new fields conditionally — don't send nulls
+if let Some(mesh_config) = build_mesh_config(step, ws_config, depth) {
+    parameters.insert("agent_name".to_string(), serde_json::json!(mesh_config.agent_name));
+    parameters.insert("mcp_config".to_string(), serde_json::json!(mesh_config.mcp_config));
+    parameters.insert("env_vars".to_string(), serde_json::json!(mesh_config.env_vars));
 }
 
-impl ProcessManager {
-    pub fn new(timeout: Duration) -> Self { /* ... */ }
-
-    pub async fn spawn_and_wait(
-        &self,
-        command: &str,
-        args: &[&str],
-        working_dir: &Path,
-        env: &[(String, String)],
-    ) -> Result<ProcessOutput, PluginError> { /* ... */ }
-}
-
-pub struct ProcessOutput {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-    pub duration_ms: u64,
+if let Some(tools) = &step_config.tools {
+    parameters.insert("tools".to_string(), serde_json::json!(tools));
 }
 ```
 
 **Rules:**
-- `spawn_and_wait` is the single entry point — no `spawn()` + separate `wait()`
-- Timeout escalation: SIGTERM -> `grace_period` -> SIGKILL (hardcoded sequence)
-- `working_dir` always set via `Command::current_dir()` — never inherit parent
-- Environment vars additive — never clear inherited env
-- `ProcessOutput` always captured, even on non-zero exit (stderr is diagnostic)
-- Testable via `CommandRunner` trait injection (constructor takes `impl CommandRunner`)
+- New parameters are only included when the feature is enabled (conditional insertion)
+- Never send `null` or empty values for optional parameters — omit entirely
+- All parameter values must be serializable via `serde_json::json!()` macro
+- Parameter keys use `snake_case` (consistent with existing convention)
+- New parameters never shadow existing ones (`system_prompt`, `model_tier`, `session_id`, `working_dir`)
+
+### YAML Generation Pattern
+
+Generated YAML files use `serde_yaml` with deterministic ordering:
+
+```rust
+use std::collections::BTreeMap; // NOT HashMap — deterministic key order
+
+fn generate_agents_yaml(registry: &BmadAgentRegistry) -> String {
+    let mut agents: BTreeMap<String, serde_yaml::Value> = BTreeMap::new();
+    for agent in registry.list_agents() {
+        let entry = build_agent_yaml_entry(&agent);
+        agents.insert(agent.name.clone(), entry);
+    }
+    let root = serde_yaml::to_value(
+        BTreeMap::from([("agents".to_string(), serde_yaml::to_value(&agents).unwrap())])
+    ).unwrap();
+    serde_yaml::to_string(&root).unwrap()
+}
+```
+
+**Rules:**
+- Use `BTreeMap` for all generated YAML maps — deterministic alphabetical key order
+- Generated files include a header comment: `# Generated by plugin-coding-pack. Do not edit manually.`
+- Generated files are written atomically (write to temp file, then rename)
+- Existing `agents.yaml` is overwritten without merge — generation is idempotent
 
 ### Enforcement Guidelines
 
-**All AI agents MUST:**
-- Run `cargo clippy -- -D warnings` before considering any plugin complete
-- Run `cargo fmt --check` before considering any plugin complete
-- Verify `#[serde(deny_unknown_fields)]` on all config structs
-- Include `plugin` field in all `tracing` macro calls
-- Use `snake_case` in all metadata JSON fields
-- Map all errors to `PluginError` variants — no `unwrap()` or `expect()` in non-test code
+**All AI Agents MUST:**
+- Use `SdkAgentDefinition` from `pulse_plugin_sdk::traits::agent_definition` — never define ad-hoc agent structs
+- Use `ChatMessage` from `pulse_plugin_sdk::types::llm` for conversation history — never use raw strings
+- Check `PULSE_AGENT_DEPTH` before any agent invocation — never skip the depth guard
+- Use `BTreeMap` for all generated config files — never use `HashMap` for serialized output
+- Run `cargo clippy -- -D warnings` and `cargo fmt --check` before marking work complete
+- Map all errors to `WitPluginError` variants — no `unwrap()` or `expect()` in non-test code
 
 **Anti-Patterns (NEVER do):**
-- `unwrap()` or `expect()` in production code — always `map_err` to `PluginError`
-- `println!` or `eprintln!` — always use `tracing` macros
-- String concatenation for error messages — use `format!` with structured context
-- Logging credentials at any level, including `trace!`
-- Nested `mod.rs` module organization
-- Hand-parsing JSON with `.get().and_then()` chains instead of typed deserialization
-- Internal retry loops — retry policy belongs to the dispatch engine
+- Hard-coding agent names as bare strings outside `agents.rs` — always reference registry constants
+- Sending `PULSE_AGENT_DEPTH` without incrementing — always pass `current + 1`
+- Using `HashMap` for YAML generation — causes non-deterministic output
+- Implementing `AgentDefinitionProvider` on `CodingPackPlugin` directly — use a separate `BmadAgentRegistry` struct for testability
+- Adding async runtime to production code — keep using `std::process::Command` + `std::thread`
+- Modifying `agents.yaml` manually — always regenerate from registry
 
 ## Project Structure & Boundaries
 
 ### Complete Project Directory Structure
 
 ```
-pulse-plugins/
-├── claude-code-v2/                    # Native plugin — Pattern C (FR8-15, FR28-31)
-│   ├── Cargo.toml
-│   ├── Cargo.lock
-│   ├── src/
-│   │   ├── lib.rs                     # Plugin registration, pub mod, re-exports
-│   │   ├── config.rs                  # ClaudeCodeConfig struct + from_step_config()
-│   │   ├── executor.rs                # TaskExecutor impl — CLI spawn, output parse
-│   │   ├── process.rs                 # ProcessManager — spawn, timeout, SIGTERM/SIGKILL
-│   │   ├── output.rs                  # StepOutput construction, metadata serialization
-│   │   └── session.rs                 # Session ID extraction, context_from handling
-│   └── tests/
-│       ├── cli_spawn_test.rs          # Integration: real claude CLI
-│       ├── config_parse_test.rs       # Config deserialization edge cases
-│       └── session_chain_test.rs      # Session ID forwarding between steps
-│
-├── git-ops/                           # Native plugin — Pattern C (FR20-27)
-│   ├── Cargo.toml
-│   ├── Cargo.lock
-│   ├── src/
-│   │   ├── lib.rs                     # Plugin registration, pub mod, re-exports
-│   │   ├── config.rs                  # GitOpsConfig struct + from_step_config()
-│   │   ├── executor.rs                # TaskExecutor impl — git command dispatch
-│   │   ├── process.rs                 # ProcessManager — copied from claude-code-v2
-│   │   ├── output.rs                  # StepOutput construction, git metadata
-│   │   ├── operations.rs              # Git operations: commit, push, branch, diff
-│   │   └── safety.rs                  # Destructive operation detection + refusal
-│   └── tests/
-│       ├── git_ops_test.rs            # Integration: real git commands
-│       ├── config_parse_test.rs       # Config deserialization edge cases
-│       └── safety_test.rs             # Destructive operation refusal
-│
-├── bmad-method/                       # WASM plugin — Pattern A/B (FR36-38)
-│   ├── Cargo.toml
-│   ├── Cargo.lock
-│   ├── rust-toolchain.toml
-│   ├── crates/
-│   │   ├── bmad-plugin/
-│   │   │   ├── Cargo.toml
-│   │   │   └── src/
-│   │   │       ├── lib.rs             # wit_bindgen::generate! + StepExecutor impl
-│   │   │       ├── config.rs          # BmadConfig struct + from_step_config()
-│   │   │       └── personas.rs        # 12 agent persona definitions + system prompts
-│   │   ├── bmad-types/
-│   │   │   ├── Cargo.toml
-│   │   │   └── src/
-│   │   │       └── lib.rs             # Shared types for persona, config
-│   │   └── bmad-converter/
-│   │       ├── Cargo.toml
-│   │       └── src/
-│   │           └── lib.rs             # Persona output → claude-code input formatting
-│   ├── wit/
-│   │   └── *.wit                      # WIT interface definitions
-│   ├── src/
-│   │   └── lib.rs                     # Crate root re-exports
-│   └── tests/
-│       └── persona_test.rs            # Persona selection + output formatting
-│
-├── test-parser/                       # WASM plugin — Pattern A/B (FR16-19)
-│   ├── Cargo.toml
-│   ├── Cargo.lock
-│   ├── src/
-│   │   ├── lib.rs                     # wit_bindgen::generate! + QualityCheck impl
-│   │   ├── config.rs                  # TestParserConfig struct + from_step_config()
-│   │   └── parser.rs                  # Test output parsing (cargo test, pytest, jest)
-│   ├── wit/
-│   │   └── *.wit                      # WIT interface definitions
-│   └── tests/
-│       └── parser_test.rs             # Test output parsing fixtures
-│
-├── workflows/                         # YAML workflow templates (FR32-35)
-│   ├── auto-dev-full.yaml             # Full pipeline: requirements → arch → impl → test → review
-│   ├── auto-dev-implement.yaml        # Quick: implement → test
-│   ├── auto-dev-review.yaml           # Review: review → fix → verify
-│   ├── bmad-analysis.yaml             # BMAD: persona analysis → claude execution
-│   └── git-commit-pr.yaml            # Git: implement → test → commit → PR
-│
-├── tests/                             # Cross-plugin integration test fixtures
-│   └── fixtures/
-│       └── sample-project/            # Sample Rust project for testing workflows
-│           ├── Cargo.toml
-│           └── src/
-│               └── lib.rs
-│
-└── bmad-method-flow/                  # This project — planning docs (not a plugin)
-    └── _bmad-output/
-        └── planning-artifacts/
-            ├── prd.md
-            └── architecture.md        # This document
+src/
+├── lib.rs              # Crate root: pub mod declarations, plugin trait impls, re-exports
+│                         MODIFIED: add `pub mod agents;` and `pub mod session;`
+│                         MODIFIED: impl AgentDefinitionProvider for BmadAgentRegistry
+├── main.rs             # Binary entry point (unchanged)
+├── agents.rs           # NEW: BmadAgentRegistry, SdkAgentDefinition instances,
+│                         agent constants, ACL definitions, AgentDefinitionProvider impl
+├── executor.rs         # MODIFIED: depth guard, mesh config injection, tool forwarding,
+│                         session step dispatch, SDK type usage
+├── session.rs          # NEW: Session step execution, conversation management,
+│                         activation strategies, convergence checking
+├── pack.rs             # MODIFIED: new "generate-agents-yaml" action,
+│                         "list-agents" action using registry
+├── validator.rs        # MODIFIED: validate session step configs, validate agents.yaml
+├── workspace.rs        # MODIFIED: AgentMeshSettings, resolve mesh config
+├── util.rs             # Utility functions (unchanged)
+└── test_parser.rs      # Test output parsing (unchanged)
+
+config/
+├── config.yaml         # MODIFIED: new `agent_mesh` section (optional)
+├── agents.yaml         # NEW: generated by `generate-agents-yaml` action
+├── plugins/
+│   ├── bmad-method              # Existing plugin binary
+│   └── provider-claude-code     # Existing plugin binary
+└── workflows/
+    ├── coding-quick-dev.yaml    # Existing (may add mesh_enabled, tools)
+    ├── coding-feature-dev.yaml  # MODIFIED: add session step for arch review
+    ├── coding-review.yaml       # MODIFIED: convert to session step type
+    └── ... (other existing workflows)
 ```
 
 ### Architectural Boundaries
 
-**Plugin <-> Pulse Engine Boundary:**
-- Plugins communicate with Pulse exclusively through `plugin-api` trait interfaces (`TaskExecutor`, `QualityCheck`)
-- Data flows via `Task` (input) -> plugin logic -> `StepOutput` (output)
-- No direct access to Pulse internals (SQLite board, dispatch engine, workspace manager)
-- Plugin config arrives as opaque `serde_json::Value` in `StepConfig.config`
+**Plugin <-> SDK Boundary:**
+- Plugin implements `AgentDefinitionProvider` via `BmadAgentRegistry` — returns owned `SdkAgentDefinition` values
+- Plugin uses SDK types (`ChatMessage`, `CompletionRequest`, `ToolDef`) for internal data modeling
+- Plugin does NOT implement `LlmProvider` or `ToolExecutor` — those are provider-claude-code's responsibility
+- Plugin does NOT implement `AgentMeshProvider` — mesh topology is resolved by the Pulse engine
 
-**Plugin <-> External Tool Boundary:**
-- `claude-code-v2` -> `claude` CLI via `ProcessManager.spawn_and_wait()`
-- `git-ops` -> `git` CLI via `ProcessManager.spawn_and_wait()`
-- `git-ops` -> GitHub/GitLab REST API via `reqwest` HTTP client (Phase 2: PR creation)
-- All external tool interaction isolated in `executor.rs` — never in `lib.rs` or `config.rs`
+**Executor <-> Provider Boundary:**
+- Executor communicates with provider-claude-code exclusively via JSON-RPC over stdio
+- New fields (`agent_name`, `mcp_config`, `env_vars`, `tools`) are added to the `parameters` object in JSON-RPC requests
+- Provider-claude-code is responsible for interpreting these fields and configuring the Claude CLI accordingly
+- Executor never directly calls the Claude CLI — always delegates to provider-claude-code
 
-**Plugin <-> Plugin Boundary:**
-- Plugins never call each other directly
-- Inter-plugin communication is exclusively via workflow DAG: step A output -> `context_from` -> step B input
-- Session continuity flows through `StepOutput.metadata.session_id`
+**Agent Registry <-> Pack Boundary:**
+- `agents.rs` owns all agent definitions and ACL rules
+- `pack.rs` consumes agent definitions via the registry API to generate `agents.yaml` and serve `list-agents` / `data-query` endpoints
+- Agent definitions are immutable at runtime — no dynamic registration
 
-**WASM Sandbox Boundary:**
-- `bmad-method` and `test-parser` run in wasmtime sandbox
-- No filesystem, network, or process spawning access
-- Host provides: `config-get`, `kv-get`, `kv-set`, `log` via WIT host-api
-- KV store is namespace-isolated per plugin (`plugin:{name}:{key}`)
+**Session <-> Executor Boundary:**
+- `session.rs` implements the multi-agent turn loop
+- `executor.rs` dispatches `type: session` steps to `session.rs`
+- Session module reuses executor's `spawn_plugin_rpc()` for individual agent calls
+- Session module reuses executor's `substitute_templates()` and `assemble_context()`
 
 ### Requirements to Structure Mapping
 
-| FR Domain | Plugin | Key Files |
+| Requirement | Module | Key Functions |
 |---|---|---|
-| FR8-12 Agentic Execution | claude-code-v2 | `executor.rs`, `process.rs`, `session.rs` |
-| FR13-15 Session & Context | claude-code-v2 | `session.rs`, `output.rs` |
-| FR16-19 Quality Assurance | test-parser | `parser.rs`, `lib.rs` (QualityCheck) |
-| FR20-27 Git Operations | git-ops | `operations.rs`, `safety.rs`, `executor.rs` |
-| FR28-31 Budget & Resources | claude-code-v2 | `output.rs` (cost metadata), `process.rs` (timeout) |
-| FR32-35 Workflow Composition | workflows/ | `*.yaml` template files |
-| FR36-38 Agent Personas | bmad-method | `personas.rs`, `bmad-converter/` |
-| FR39-42 Observability | All plugins | `tracing` structured logging in every module |
+| FR-SDK-1: AgentDefinitionProvider | `agents.rs` | `BmadAgentRegistry::list_agents()`, `get_agent()` |
+| FR-SDK-2: Agent SdkAgentDefinition mapping | `agents.rs` | `bmad_architect()`, `bmad_developer()`, etc. |
+| FR-SDK-3: Mesh config injection | `executor.rs` | `build_mesh_config()`, agent step execution |
+| FR-SDK-4: Depth guard | `executor.rs` | `check_depth_guard()` |
+| FR-SDK-5: Session step type | `session.rs` | `execute_session_step()` |
+| FR-SDK-6: Workspace mesh config | `workspace.rs` | `AgentMeshSettings`, `ConfigYaml` |
+| FR-SDK-7: agents.yaml generation | `pack.rs`, `agents.rs` | `generate_agents_yaml()` |
+| FR-SDK-8: SDK LLM types | `executor.rs` | Internal type usage |
+| FR-SDK-9: Tool forwarding | `executor.rs` | `parameters.insert("tools", ...)` |
+| FR-SDK-10: MCP tools | `main.rs` (future) | `list_agents`, `invoke_agent` MCP handlers |
 
 ### Data Flow
 
 ```
-Workflow YAML -> Pulse Engine -> plugin-api::TaskExecutor::execute()
-                                    |
-                    +---------------+-------------------+
-                    v               v                   v
-              claude-code-v2    git-ops           bmad-method
-              (spawn claude)   (spawn git)     (WASM persona logic)
-                    |               |                   |
-                    v               v                   v
-              StepOutput        StepOutput          StepOutput
-              {content,         {content,           {content,
-               metadata:         metadata:           metadata:
-               session_id,       commit_sha,         persona,
-               cost_usd}         branch}              agent_config}
-                    |               |                   |
-                    +---------------+-------------------+
-                                    v
-                          Pulse Engine (context_from)
-                                    v
-                          Next step receives upstream
-                          output in Task.input / metadata
+Workflow YAML (type: agent, mesh_enabled: true)
+    │
+    ▼
+executor.rs: execute_step()
+    │
+    ├─→ check_depth_guard(ws_config) → fail if depth > max
+    │
+    ├─→ agents.rs: BmadAgentRegistry::get_agent(name)
+    │   → SdkAgentDefinition { name, skills, tools, system_prompt, ... }
+    │
+    ├─→ build_mesh_config(step, ws_config, depth)
+    │   → { agent_name, mcp_config, env_vars }
+    │
+    ├─→ JSON-RPC to provider-claude-code
+    │   params: { system_prompt, model_tier, session_id, working_dir,
+    │             agent_name, mcp_config, env_vars, tools }
+    │
+    └─→ provider-claude-code spawns Claude CLI with:
+        - --agent-name bmad/architect
+        - MCP server config injected
+        - PULSE_AGENT_DEPTH=2 in env
+        - Tools available via MCP
+
+
+Workflow YAML (type: session)
+    │
+    ▼
+executor.rs: execute_step() → session.rs: execute_session_step()
+    │
+    ├─→ Initialize conversation: Vec<ChatMessage>
+    │
+    ├─→ For each turn until convergence:
+    │   ├─→ For each participant (activation check):
+    │   │   ├─→ agents.rs: get_agent(participant.agent)
+    │   │   ├─→ JSON-RPC to provider-claude-code (with full history)
+    │   │   └─→ Append response to conversation
+    │   └─→ Check convergence (fixed_turns / unanimous / stagnation)
+    │
+    └─→ Build StepOutput from final conversation
+
+
+pack.rs: execute_action("generate-agents-yaml")
+    │
+    ├─→ agents.rs: BmadAgentRegistry::list_agents()
+    │   → Vec<SdkAgentDefinition>
+    │
+    ├─→ For each agent: build ACL entry (can_invoke, can_respond_to, model, etc.)
+    │
+    ├─→ Serialize to YAML via serde_yaml (BTreeMap for deterministic order)
+    │
+    └─→ Write to config/agents.yaml (atomic write)
 ```
 
 ### Development Workflow Integration
 
-**Build (per plugin):**
+**Build:**
 ```bash
-# Native plugins
-cd pulse-plugins/claude-code-v2 && cargo build --release
-cd pulse-plugins/git-ops && cargo build --release
-
-# WASM plugins
-cd pulse-plugins/test-parser && cargo build --target wasm32-wasip2 --release
-cd pulse-plugins/bmad-method && cargo build --target wasm32-wasip2 --release
+cargo build --release  # Produces plugin-coding-pack binary + cdylib
 ```
 
-**Test (per plugin):**
+**Test:**
 ```bash
-cd pulse-plugins/claude-code-v2 && cargo test
-cd pulse-plugins/git-ops && cargo test
+cargo test             # Unit tests including agent registry, depth guard, session
+cargo clippy -- -D warnings
+cargo fmt --check
 ```
 
-**Integration test (full stack):**
+**Generate agents.yaml:**
 ```bash
-cd pulse-plugin-test && make run-test
+echo '{"action": "generate-agents-yaml"}' | ./target/release/plugin-coding-pack
+# Writes config/agents.yaml
 ```
 
 **Deployment:**
-- Native plugin binaries -> `pulse-plugin-test/plugins/bin/` (or configured `plugin_dir`)
-- WASM plugin artifacts -> same directory, `.wasm` extension
-- Workflow YAML -> `pulse-plugin-test/config/workflows/`
-- Plugin config YAML -> `pulse-plugin-test/config/plugins/`
+- Binary → `config/plugins/plugin-coding-pack`
+- `config/agents.yaml` → generated on install or via `generate-agents-yaml` action
+- Workspace `config/config.yaml` → optionally add `agent_mesh` section
 
 ## Architecture Validation Results
 
 ### Coherence Validation
 
-**Decision Compatibility:** All technology choices are internally consistent. Native plugins (Pattern C) and WASM plugins (Pattern A/B) use non-overlapping toolchains with well-defined boundaries. No version conflicts between dependencies.
+**Decision Compatibility:** All decisions are internally consistent. The agent registry (Decision 1) feeds both YAML generation (Decision 4) and executor lookup (Decisions 2, 5). The depth guard (Decision 3) works regardless of invocation path (agent step or session step). Tool forwarding (Decision 7) is orthogonal to mesh injection (Decision 2) — both add fields to the same JSON-RPC parameters map without conflict.
 
-**Pattern Consistency:** Implementation patterns (crate structure, config deserialization, logging, testing) align with Rust ecosystem conventions and Pulse's existing plugin patterns. ProcessManager API is specified identically for both native plugins.
+**Pattern Consistency:** Implementation patterns align with existing codebase conventions. New config uses `#[serde(default)]` like existing fields. New executor functions follow the same `Result<(StepOutput, Option<String>), WitPluginError>` return type. Generated YAML uses `BTreeMap` for determinism.
 
-**Structure Alignment:** Project directory structure directly maps to architectural decisions. Each plugin has clear boundaries, consistent internal organization, and explicit integration points through `plugin-api` traits.
+**Structure Alignment:** New files (`agents.rs`, `session.rs`) follow the flat module layout established in architecture-v1. Modified files (`executor.rs`, `workspace.rs`, `pack.rs`) extend existing patterns rather than replacing them.
 
 ### Requirements Coverage Validation
 
-**Functional Requirements Coverage:** 45/45 FRs have architectural support.
+**Functional Requirements Coverage:** 10/10 FR-SDK requirements have architectural support.
 
-| FR Domain | Status | Notes |
+| Requirement | Status | Notes |
 |---|---|---|
-| FR1-7 Orchestration | Covered | Pulse engine + workflow YAML templates |
-| FR8-12 Agentic Execution | Covered | claude-code-v2 — health check addressed below |
-| FR13-15 Session & Context | Covered | session.rs + StepOutput.metadata forwarding |
-| FR16-19 Quality Assurance | Covered | test-parser QualityCheck trait |
-| FR20-27 Git Operations | Covered | git-ops native — PR creation (FR24-25) deferred to Phase 2 |
-| FR28-31 Budget & Resources | Covered | cost metadata in output + ProcessManager timeout |
-| FR32-35 Workflow Composition | Covered | workflows/*.yaml inline templates |
-| FR36-38 Agent Personas | Covered | bmad-method personas.rs + bmad-converter |
-| FR39-42 Observability | Covered | tracing structured logging, Pulse engine dashboard |
+| FR-SDK-1: AgentDefinitionProvider | Covered | `BmadAgentRegistry` in `agents.rs` |
+| FR-SDK-2: Agent mapping | Covered | 9 agents with full `SdkAgentDefinition` fields |
+| FR-SDK-3: Mesh config injection | Covered | JSON-RPC parameter enrichment in `executor.rs` |
+| FR-SDK-4: Depth guard | Covered | `PULSE_AGENT_DEPTH` check in `executor.rs` |
+| FR-SDK-5: Session step type | Covered | `session.rs` with activation + convergence |
+| FR-SDK-6: Workspace mesh config | Covered | `AgentMeshSettings` in `workspace.rs` |
+| FR-SDK-7: agents.yaml generation | Covered | `generate-agents-yaml` action in `pack.rs` |
+| FR-SDK-8: SDK LLM types | Covered | Internal type adoption in `executor.rs` |
+| FR-SDK-9: Tool forwarding | Covered | `tools` field in step config + JSON-RPC |
+| FR-SDK-10: MCP tools | Deferred | Future `--mcp-mode` flag on binary entry point |
 
-**Non-Functional Requirements Coverage:** 19/19 NFRs have architectural support.
-- Performance (NFR1-5): tokio async, direct CLI spawn, serde_json typed deserialization
-- Security (NFR6-9): Credential isolation in host config, workspace path enforcement, output sanitization via error mapping
-- Reliability (NFR10-14): ProcessManager timeout escalation, PluginError propagation, WASM sandbox containment
-- Integration (NFR15-19): Version constraints documented, YAML schema validation at submission
-
-### Health Check Implementation Note
-
-**FR12 Resolution:** The `plugin-api` trait set does not include a dedicated `health_check()` method. Health verification is implemented at two levels:
-
-1. **Registration-time:** The plugin-loader's `CompatibilityChecker` validates API version compatibility and plugin metadata during startup. Plugins that fail compatibility are logged and skipped.
-
-2. **Runtime health (per-plugin):** Native plugins implement a lightweight health probe in their `TaskExecutor::execute()` path. Before first execution, `claude-code-v2` runs `claude --version` and verifies exit code 0. `git-ops` runs `git --version` and verifies exit code 0 and version >= 2.20. Health failures return `PluginError::not_found` with a diagnostic message.
-
-```rust
-// In executor.rs — called once on first execute, result cached
-async fn check_tool_health(process_mgr: &ProcessManager, working_dir: &Path) -> Result<(), PluginError> {
-    let output = process_mgr.spawn_and_wait("claude", &["--version"], working_dir, &[]).await?;
-    if output.exit_code != 0 {
-        return Err(PluginError::not_found("claude CLI not found or not functional"));
-    }
-    Ok(())
-}
-```
-
-Health status is reported via `tracing::info!` at startup and via `PluginError::not_found` on failure. No custom health endpoint is needed — the Pulse engine treats `NotFound` errors as plugin unavailability.
+**Non-Functional Requirements Coverage:** 5/5 NFR-SDK requirements have architectural support.
+- NFR-SDK-1: Depth guard is O(1) env var read + integer compare
+- NFR-SDK-2: YAML generation uses in-memory data + single `serde_yaml::to_string` call
+- NFR-SDK-3: Agent registry is a static `Vec` — no I/O
+- NFR-SDK-4: Convergence evaluation is simple condition check per turn
+- NFR-SDK-5: Breaking changes are the explicit design choice
 
 ### Gap Analysis Results
 
 **Critical Gaps:** None. All implementation-blocking decisions are documented.
 
-**Known Deferrals (Phase 2):**
-- PR creation (FR24-25) — requires `reqwest` HTTP client for GitHub/GitLab APIs
-- Step library YAML references — requires Pulse engine `$ref` support
-- Workflow dry-run validation mode
-- git-ops WASM migration — requires host capability extensions
+**Known Deferrals:**
+- FR-SDK-10 (MCP tools): The `--mcp-mode` binary flag for exposing `list_agents`/`invoke_agent` via MCP stdio is deferred to a follow-up. Current agent mesh works via provider-claude-code injecting MCP config.
+- Direct `LlmProvider::complete()` invocation: The executor continues to use JSON-RPC for now. Direct in-process LLM calls are a Phase 2 optimization.
+- Cost tracking via `TokenUsage`: Extracting `TokenUsage` from provider responses and integrating with cost-tracker plugin is deferred.
+- Session persistence: Multi-agent sessions are currently ephemeral (state lost if executor crashes mid-session).
 
 **Minor Gaps (story-level detail):**
-- Exact `claude` CLI flags for `--output-format json` response parsing (depends on Claude CLI version)
-- GitHub vs GitLab API endpoint differences for PR creation (Phase 2)
-- bmad-method persona prompt content (12 personas, content is implementation detail)
+- Exact system prompt text for each BMAD agent persona (content, not architecture)
+- Provider-claude-code's handling of new `mcp_config` and `env_vars` fields (upstream dependency)
+- Session step YAML schema validation rules (implementation detail for `validator.rs`)
 
 ### Architecture Completeness Checklist
 
 **Requirements Analysis**
-- [x] Project context thoroughly analyzed (45 FRs, 19 NFRs across 9 domains)
-- [x] Scale and complexity assessed (High — multi-plugin, dual compilation targets)
-- [x] Technical constraints identified (zero core modifications, WASM sandbox limits)
-- [x] Cross-cutting concerns mapped (8 concerns: process lifecycle, output contract, workspace path, credential isolation, error propagation, config parsing, session continuity, budget enforcement)
+- [x] Integration scope thoroughly analyzed (10 FRs, 5 NFRs)
+- [x] Upstream SDK types and traits reviewed at source level
+- [x] Existing codebase fully read and understood
+- [x] Cross-cutting concerns mapped (identity propagation, depth guard, config compat, ACL consistency, session state)
 
 **Architectural Decisions**
-- [x] Critical decisions documented (8 decisions with rationale)
-- [x] Technology stack fully specified (Rust 2021, tokio 1.40, wasmtime 28.0, serde 1.0)
-- [x] Plugin patterns defined (Pattern C native, Pattern A/B WASM)
-- [x] Error handling and recovery specified
-- [x] Testing strategy documented
+- [x] Critical decisions documented (7 decisions with rationale and code examples)
+- [x] Technology choices aligned with existing stack (Rust, serde, std process model)
+- [x] Integration patterns defined (JSON-RPC parameter extension, env var propagation)
+- [x] Error handling follows existing `WitPluginError` patterns
+- [x] Breaking changes explicitly accepted
 
 **Implementation Patterns**
-- [x] Crate internal structure defined (flat src/*.rs layout)
-- [x] Config deserialization pattern specified (typed structs, deny_unknown_fields)
-- [x] StepOutput metadata conventions established (snake_case, mandatory fields)
-- [x] Logging conventions defined (structured tracing fields, level guidelines)
-- [x] Test organization specified (inline unit tests, tests/ integration)
-- [x] ProcessManager API specified (spawn_and_wait, timeout escalation)
+- [x] Agent definition pattern specified (builder with constants)
+- [x] Config extension pattern specified (optional fields, serde defaults)
+- [x] Session execution pattern specified (turn loop with convergence)
+- [x] JSON-RPC extension pattern specified (conditional parameter insertion)
+- [x] YAML generation pattern specified (BTreeMap, atomic write)
 - [x] Enforcement guidelines and anti-patterns documented
 
 **Project Structure**
-- [x] Complete directory structure defined (4 plugins, workflows, test fixtures)
-- [x] Architectural boundaries established (plugin-engine, plugin-tool, plugin-plugin, WASM sandbox)
-- [x] Requirements to structure mapping complete (FR domain -> plugin -> files table)
-- [x] Data flow documented
+- [x] Complete file listing with new/modified annotations
+- [x] Architectural boundaries established (plugin-SDK, executor-provider, registry-pack, session-executor)
+- [x] Requirements to structure mapping complete
+- [x] Data flow documented for all three execution paths (agent mesh, session, YAML generation)
 - [x] Build, test, and deployment commands specified
 
 ### Architecture Readiness Assessment
@@ -782,410 +745,36 @@ Health status is reported via `tracing::info!` at startup and via `PluginError::
 **Confidence Level:** High
 
 **Key Strengths:**
-- Brownfield context eliminates technology risk — all patterns proven in existing Pulse plugins
-- Clear separation between native (process-spawning) and WASM (sandboxed) plugins
-- Concrete code examples for every implementation pattern
-- Explicit anti-pattern list prevents common AI agent mistakes
-- FR-to-file mapping gives agents precise implementation targets
+- All upstream SDK types reviewed at source — no assumptions about API shapes
+- Minimal invasive changes to existing working code (executor additions, not rewrites)
+- Clear separation between new modules (`agents.rs`, `session.rs`) and modified modules
+- Depth guard is trivially simple and impossible to bypass
+- YAML generation is idempotent and deterministic
+- Breaking changes accepted — no backward compatibility burden
 
 **Areas for Future Enhancement:**
-- Shared `ProcessManager` crate if a third native plugin is added
-- WASM host capability extensions for git-ops migration
-- Step library references when Pulse engine supports `$ref`
-- Dashboard extension for plugin-specific monitoring views
+- MCP mode for direct agent mesh tool exposure (`--mcp-mode` flag)
+- Direct `LlmProvider::complete()` for in-process LLM calls (skip JSON-RPC overhead)
+- Session persistence for crash recovery
+- Cost tracking integration via `TokenUsage`
+- Dynamic agent registration (runtime plugin-provided agents beyond BMAD set)
+- `match_skills()` integration for automatic agent selection based on task requirements
 
 ### Implementation Handoff
 
 **AI Agent Guidelines:**
 - Follow all architectural decisions exactly as documented
-- Use implementation patterns consistently across all plugins
+- Use implementation patterns consistently across all new and modified modules
 - Respect project structure and architectural boundaries
-- Refer to this document for all architectural questions
+- Reference this document for all architectural questions
 - Run `cargo clippy -- -D warnings` and `cargo fmt --check` before marking any work complete
 
 **Implementation Sequence:**
-1. claude-code-v2 (highest complexity, most downstream dependencies)
-2. git-ops (reuses ProcessManager pattern from claude-code-v2)
-3. test-parser (WASM, independent)
-4. bmad-method (WASM, depends on claude-code for downstream execution)
-5. Workflow templates (compose all plugins)
-6. plugin-memory (shell wrapper, workflow integration)
-
----
-
-## Addendum: Epic 6 — Knowledge Graph Memory Plugin Architecture
-
-*Added: 2026-03-20*
-
-### Overview
-
-plugin-memory is a **shell script plugin** (not a compiled Rust binary) that wraps external knowledge graph providers. It follows a multi-provider dispatcher pattern, reading `config/config.yaml` to determine which backend to use.
-
-### Architectural Decisions
-
-#### Shell Script Plugin (Not Rust)
-
-- **Decision:** Implement plugin-memory as a bash shell script, not a Rust crate
-- **Rationale:** The plugin delegates entirely to external tools (GitNexus via npx, Greptile via curl). No business logic requires Rust's type system or performance. A shell script is trivially extensible — adding a new provider requires only a new `xxx_exec()` function.
-- **Affects:** Build pipeline (no cargo build needed), deployment (copy script + chmod), testing (integration only)
-
-#### Multi-Provider Config Dispatch
-
-- **Decision:** Provider selection via `config/config.yaml` → `memory.provider` field
-- **Rationale:** Teams use different indexing backends. GitNexus requires Node.js, Greptile requires API access. The `none` provider cleanly disables all memory steps without workflow changes.
-- **Config schema:**
-  ```yaml
-  memory:
-    provider: gitnexus|greptile|none
-    auto_reindex: true|false
-    gitnexus:
-      package: "gitnexus@latest"
-    greptile:
-      api_key_env: "GREPTILE_API_KEY"
-      remote: "github:owner/repo"
-  ```
-
-#### Optional Workflow Steps
-
-- **Decision:** All memory steps in coding workflows are marked `optional: true`
-- **Rationale:** Memory is an enhancement, not a requirement. Workflows must function identically without plugin-memory installed. The `optional` flag ensures the Pulse engine skips the step gracefully rather than failing the workflow.
-- **Affects:** All 6 coding workflow YAMLs, workflow validator
-
-### Provider Capability Matrix
-
-| Command | GitNexus | Greptile | None |
-|---------|----------|----------|------|
-| index | `npx gitnexus analyze` | `POST /v2/repositories` | skip |
-| reindex | `npx gitnexus analyze --preserve-embeddings` | `POST /v2/repositories` (reload) | skip |
-| query | `npx gitnexus query` | `POST /v2/query` | skip |
-| impact | `npx gitnexus impact` | `POST /v2/query` (with impact prompt) | skip |
-| context | `npx gitnexus context` | `POST /v2/query` (with context prompt) | skip |
-| detect-changes | `npx gitnexus detect-changes` | `POST /v2/query` (with diff prompt) | skip |
-| rename | `npx gitnexus rename` | ❌ not supported | skip |
-| mcp | `npx gitnexus mcp` | ❌ not supported | skip |
-
-### Workflow Integration Pattern
-
-Memory steps are injected at three points in every coding workflow:
-
-```
-┌─────────────────┐
-│ memory_context   │  ← Query knowledge graph with user input
-│ (optional)       │     Provides: call chains, dependencies, clusters
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ architect/plan   │  ← Receives memory context via context_from
-│ (existing step)  │
-└────────┬────────┘
-         ↓
-    ... (implement, QA review) ...
-         ↓
-┌──────────────────────┐
-│ memory_detect_changes │  ← Map git diff → affected processes + risk
-│ (optional)            │
-└────────┬─────────────┘
-         ↓
-┌─────────────────┐
-│ git_commit       │  ← Existing commit step
-│ (existing step)  │
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ memory_reindex   │  ← Incremental re-index preserving embeddings
-│ (optional)       │
-└─────────────────┘
-```
-
-### Data Flow
-
-```
-config/config.yaml ──→ plugin-memory (read config)
-                              │
-                    ┌─────────┼──────────┐
-                    ↓         ↓          ↓
-              GitNexus    Greptile     None
-              (npx)      (curl API)   (noop)
-                    │         │
-                    ↓         ↓
-              JSON output → workflow step output
-                              │
-                              ↓
-                    context_from → downstream agent steps
-```
-
-### File Structure
-
-```
-config/
-├── config.yaml                      # memory.provider config
-├── plugins/
-│   └── plugin-memory                # Shell script (executable)
-└── workflows/
-    ├── coding-memory-index.yaml     # Standalone indexing workflow
-    ├── coding-feature-dev.yaml      # +3 memory steps
-    ├── coding-bug-fix.yaml          # +3 memory steps
-    ├── coding-quick-dev.yaml        # +2 memory steps
-    ├── coding-refactor.yaml         # +3 memory steps
-    ├── coding-story-dev.yaml        # +3 memory steps
-    └── coding-review.yaml           # +1 memory step
-```
-
-### Adding a New Provider
-
-To add a new knowledge graph provider (e.g., `sourcegraph`):
-
-1. Add provider config section to `config/config.yaml`:
-   ```yaml
-   memory:
-     sourcegraph:
-       endpoint: "https://sourcegraph.example.com"
-       token_env: "SRC_ACCESS_TOKEN"
-   ```
-
-2. Add `sourcegraph_exec()` function to `config/plugins/plugin-memory`:
-   ```bash
-   sourcegraph_exec() {
-     local cmd="$1"; shift
-     case "$cmd" in
-       query) src search "$@" ;;
-       # ...
-     esac
-   }
-   ```
-
-3. Add dispatch case:
-   ```bash
-   case "$PROVIDER" in
-     gitnexus)    gitnexus_exec "$COMMAND" "$@" ;;
-     greptile)    greptile_exec "$COMMAND" "$@" ;;
-     sourcegraph) sourcegraph_exec "$COMMAND" "$@" ;;
-   esac
-   ```
-
-No workflow changes needed — the provider abstraction handles routing.
-
----
-
-## Addendum: In-Plugin Workflow Executor Architecture
-
-*Added: 2026-03-21*
-
-### Overview
-
-The plugin-coding-pack now includes a **built-in workflow executor** (`src/executor.rs`) that can execute workflow DAGs without depending on the Pulse engine's dispatch system. This enables standalone autonomous development via a single `execute-workflow` action.
-
-### Architectural Decisions
-
-#### Executor Inside the Meta-Plugin (Not in Pulse Engine)
-
-- **Decision:** Implement the workflow executor as a new action in plugin-coding-pack rather than waiting for or depending on Pulse engine's workflow dispatch
-- **Rationale:** The Pulse engine's `local:` source support for `install-pack` is incomplete, and workflow dispatch may not handle the coding pack's specific needs (two-stage agent execution, session forwarding). An in-plugin executor gives full control over execution semantics while remaining compatible with future Pulse engine dispatch.
-- **Affects:** `src/executor.rs` (new module), `src/pack.rs` (new action), all workflow YAML files
-
-#### Two-Stage Agent Execution for bmad-method Steps
-
-- **Decision:** Agent steps with `executor: bmad-method` execute in two stages:
-  1. Call bmad-method via JSON-RPC → receive agent persona (system prompt, suggested config, capabilities)
-  2. Call provider-claude-code via JSON-RPC → execute LLM reasoning with merged persona + task instructions
-- **Rationale:** bmad-method is a **persona provider**, not an LLM executor. It returns agent definitions (e.g., "Winston the Architect" with role-specific system prompt). The actual reasoning must be performed by provider-claude-code which spawns the Claude CLI.
-- **Prompt merging strategy:** Persona system prompt comes first (agent character/role), followed by `## Task-Specific Instructions` section from the workflow YAML's `system_prompt` field. This gives the agent its identity while focusing it on the specific task.
-- **Model selection:** Workflow `model_tier` overrides persona `suggested_config.model_tier`. If neither specified, defaults to `"balanced"`.
-- **Affects:** All workflow steps with `executor: bmad-method` (17 steps across 8 workflows)
-
-#### Direct Execution for provider-claude-code Steps
-
-- **Decision:** Agent steps with `executor: provider-claude-code` call the plugin directly (single stage)
-- **Rationale:** provider-claude-code is already an LLM executor. No persona lookup needed — the workflow YAML `system_prompt` is passed directly as the system prompt.
-- **Affects:** Implementation steps in all coding workflows
-
-#### Session Continuity via Template Variables
-
-- **Decision:** Extract `session_id` from provider-claude-code responses and forward to subsequent LLM calls via `template_vars`
-- **Rationale:** provider-claude-code returns `{"result": "...", "session_id": "uuid", "total_cost_usd": N}`. Forwarding `session_id` to subsequent steps enables multi-turn reasoning chains where later steps can reference earlier context without re-sending it.
-- **Mechanism:** After each provider-claude-code call, the executor parses the inner JSON, extracts `session_id`, stores it in `template_vars["session_id"]`, and includes it in `config.parameters.session_id` for the next LLM call.
-- **Affects:** All sequential agent steps within a workflow
-
-#### Sequential DAG Execution (v1)
-
-- **Decision:** Execute steps sequentially in topological order. No parallel execution in v1.
-- **Rationale:** Simplicity. Parallel execution (e.g., `adversarial_review` + `edge_case_review` in coding-review.yaml) would require thread pooling and concurrent process management. Sequential execution is correct for all workflows — parallel steps simply run one after another. Parallel execution can be added in v2 if performance becomes a concern.
-- **Algorithm:** Kahn's algorithm (BFS topological sort) with deterministic alphabetical ordering for steps at the same dependency level.
-- **Affects:** All workflows, especially coding-review.yaml (parallel reviews run sequentially)
-
-#### Function Steps as Direct Subprocesses
-
-- **Decision:** Function steps execute their `command` array directly as a subprocess, NOT via JSON-RPC
-- **Rationale:** Function steps like `git add -A && git commit` are shell commands, not plugin RPC calls. The executor resolves the program path (checking `config/plugins/` first, then `$PATH`), substitutes template variables in all command parts, and spawns the process directly.
-- **Affects:** All git-commit, git-worktree, and plugin-memory function steps
-
-### Execution Data Flow
-
-```
-User Input: {"action": "execute-workflow", "workflow_id": "coding-quick-dev", "input": "Add login"}
-    │
-    ▼
-┌─────────────────────────────────┐
-│ executor::execute_workflow()     │
-│ 1. Load config/workflows/*.yaml │
-│ 2. Check required plugins       │
-│ 3. Topological sort (Kahn's)    │
-│ 4. Execute steps sequentially   │
-└────────────┬────────────────────┘
-             │
-    ┌────────┴────────────────────────────────┐
-    │ For each step in DAG order:             │
-    │                                         │
-    │  type: agent, executor: bmad-method     │
-    │  ┌─────────────────────────────────┐    │
-    │  │ Stage 1: bmad-method (JSON-RPC) │    │
-    │  │ → persona JSON (system_prompt)  │    │
-    │  └──────────────┬──────────────────┘    │
-    │                 ▼                       │
-    │  ┌─────────────────────────────────┐    │
-    │  │ Stage 2: provider-claude-code   │    │
-    │  │ (JSON-RPC, merged prompt)       │    │
-    │  │ → LLM result + session_id      │    │
-    │  └──────────────┬──────────────────┘    │
-    │                 │                       │
-    │  type: agent, executor: provider-cc     │
-    │  ┌─────────────────────────────────┐    │
-    │  │ Direct: provider-claude-code    │    │
-    │  │ (JSON-RPC, workflow prompt)     │    │
-    │  │ → LLM result + session_id      │    │
-    │  └──────────────┬──────────────────┘    │
-    │                 │                       │
-    │  type: function                         │
-    │  ┌─────────────────────────────────┐    │
-    │  │ Direct subprocess               │    │
-    │  │ (command array, template vars)  │    │
-    │  │ → stdout/stderr + exit code     │    │
-    │  └──────────────┬──────────────────┘    │
-    │                 │                       │
-    │  Store output → HashMap<step_id, out>   │
-    │  Extract branch_name, session_id        │
-    │  Assemble context_from for next step    │
-    └────────────┬────────────────────────────┘
-                 │
-                 ▼
-    Result JSON: {workflow_id, status, steps[], total_execution_time_ms}
-```
-
-### Timeout & Process Management
-
-- **Per-step timeout:** Configurable via `config.timeout_seconds`, default 300s
-- **Enforcement:** Watchdog thread with `mpsc::recv_timeout`. On expiry, sends `kill -9` to child process via `Command::new("kill")` (safe, no `unsafe` code)
-- **AtomicBool flag:** Signals timeout back to main thread after child is killed
-- **No async runtime:** Uses `std::process::Command` + `std::thread` (project uses tokio only in dev-dependencies)
-
-### File Structure
-
-```
-src/
-├── lib.rs          # pub mod executor; (1 line added)
-├── executor.rs     # Workflow executor — 650 lines, 24 unit tests
-│   ├── WorkflowDef, StepDef, StepConfigDef    (YAML deserialization)
-│   ├── StepOutput, StepStatus                  (execution results)
-│   ├── execute_workflow()                      (entry point)
-│   ├── execute_bmad_agent_step()               (two-stage)
-│   ├── execute_direct_agent_step()             (single-stage)
-│   ├── execute_function_step()                 (subprocess)
-│   ├── spawn_plugin_rpc()                      (JSON-RPC over stdio)
-│   ├── topological_sort()                      (Kahn's algorithm)
-│   ├── assemble_context()                      (context_from)
-│   ├── substitute_templates()                  ({{input}}, {{branch_name}})
-│   └── extract_branch_name()                   (agent output parsing)
-├── pack.rs         # execute_action() + "execute-workflow" match arm
-├── validator.rs    # (unchanged — validation only)
-└── main.rs         # (unchanged — JSON-RPC stdio adapter)
-```
-
----
-
-## Addendum: Quality Gate Architecture
-
-*Added: 2026-03-21*
-
-### Overview
-
-Quality gates enable review/QA steps to **block downstream commit steps** based on their verdict. Without gates, `git_commit` executes unconditionally after `qa_review`, regardless of whether the review found critical issues.
-
-### Architectural Decisions
-
-#### Verdict Extraction from Review Output
-
-- **Decision:** Parse review step output for a structured verdict line using the pattern `verdict: approve|request-changes|reject`
-- **Rationale:** Review steps are LLM-generated text. Rather than requiring a specific JSON schema (which LLMs may not follow consistently), we scan for a simple `verdict:` line — the same pattern used for `branch_name:` extraction. Workflow YAML system prompts instruct the reviewing agent to include this line.
-- **Verdict values:**
-  - `approve` — step passes, downstream steps proceed
-  - `request-changes` — step fails with actionable feedback, blocks commit
-  - `reject` — step fails with critical issues, blocks commit
-- **Fallback:** If no `verdict:` line is found, the step is treated as `approve` (backwards-compatible — existing workflows without verdict instructions still work)
-- **Affects:** `src/executor.rs` (new `extract_verdict()` function), review step system prompts in workflow YAMLs
-
-#### Gate Evaluation in the Executor
-
-- **Decision:** Implement gates as a **step dependency check enhancement** rather than a separate gate step type
-- **Rationale:** The existing `depends_on` mechanism already blocks downstream steps when upstream steps fail. By marking a review step as "failed" when its verdict is `request-changes` or `reject`, the commit step is automatically blocked via the existing dependency satisfaction logic. No new step type or YAML schema needed.
-- **Mechanism:**
-  1. After an agent step completes successfully (LLM returned output), check if the step's `system_prompt` contains the keyword `review` or `qa`
-  2. If so, scan the output for `verdict:` line
-  3. If verdict is `request-changes` or `reject`, mark the step as `StepStatus::Failed` with the verdict and review findings in the error field
-  4. Downstream steps depending on this review step will be blocked by `dependencies_satisfied()`
-- **Affects:** `src/executor.rs` (verdict extraction + gate evaluation in `execute_workflow` main loop)
-
-#### Review Step System Prompt Convention
-
-- **Decision:** All review/QA workflow steps must include a verdict instruction in their `system_prompt`
-- **Convention:**
-  ```
-  End your review with a verdict line in exactly this format:
-  verdict: approve
-  OR
-  verdict: request-changes
-  OR
-  verdict: reject
-  ```
-- **Affects:** All workflow YAMLs containing review steps: `coding-feature-dev.yaml` (qa_review), `coding-story-dev.yaml` (qa_review), `coding-bug-fix.yaml` (edge_case_review), `coding-refactor.yaml` (regression_review), `coding-review.yaml` (adversarial_review, edge_case_review), `bootstrap-plugin.yaml` (qa_review), `bootstrap-cycle.yaml` (qa_review)
-
-### Gate Evaluation Flow
-
-```
-┌──────────────┐
-│  qa_review   │  Agent step (executor: bmad-method, two-stage)
-│  type: agent │  System prompt includes: "End with verdict: approve|request-changes|reject"
-└──────┬───────┘
-       │ LLM output includes: "verdict: request-changes"
-       ▼
-┌──────────────────────────┐
-│ extract_verdict(output)  │  → "request-changes"
-│ verdict != "approve"     │
-│ → mark step FAILED       │
-│ → error = review findings│
-└──────┬───────────────────┘
-       │ StepStatus::Failed
-       ▼
-┌──────────────────────────┐
-│ git_commit               │
-│ depends_on: [qa_review]  │
-│ dependencies_satisfied() │  → false (qa_review failed, not optional)
-│ → SKIPPED                │
-└──────────────────────────┘
-
-Result: workflow status = "failed", commit blocked
-```
-
-### Implementation Impact
-
-| File | Change |
-|------|--------|
-| `src/executor.rs` | Add `extract_verdict()` function (~15 lines) |
-| `src/executor.rs` | Add gate evaluation after agent step completion (~10 lines) |
-| `config/workflows/coding-feature-dev.yaml` | Add verdict instruction to qa_review system_prompt |
-| `config/workflows/coding-story-dev.yaml` | Add verdict instruction to qa_review system_prompt |
-| `config/workflows/coding-bug-fix.yaml` | Add verdict instruction to edge_case_review system_prompt |
-| `config/workflows/coding-refactor.yaml` | Add verdict instruction to regression_review system_prompt |
-| `config/workflows/coding-review.yaml` | Add verdict instruction to adversarial_review + edge_case_review |
-| `config/workflows/bootstrap-plugin.yaml` | Add verdict instruction to qa_review system_prompt |
-| `config/workflows/bootstrap-cycle.yaml` | Add verdict instruction to qa_review system_prompt |
-| Unit tests | `test_extract_verdict_*` (~5 tests) |
+1. `src/agents.rs` — Agent registry with all 9 BMAD agents (foundational, no deps)
+2. `src/workspace.rs` — `AgentMeshSettings` and config parsing (extends existing)
+3. `src/executor.rs` — Depth guard + mesh injection + tool forwarding (modifies existing)
+4. `src/session.rs` — Session step type with activation + convergence (new module)
+5. `src/pack.rs` — `generate-agents-yaml` + `list-agents` actions (depends on registry)
+6. `src/lib.rs` — Wire up new modules, expose `AgentDefinitionProvider`
+7. `src/validator.rs` — Session step validation, agents.yaml validation
+8. Workflow YAML updates — Add session steps, mesh config, tool definitions
