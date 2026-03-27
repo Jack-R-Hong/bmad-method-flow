@@ -1,4 +1,5 @@
 use crate::workspace::WorkspaceConfig;
+use fs2::FileExt;
 use pulse_plugin_sdk::error::WitPluginError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -35,17 +36,45 @@ fn registry_path(config: &WorkspaceConfig) -> PathBuf {
     config.base_dir.join("config/worktree-registry.json")
 }
 
+/// Acquire an exclusive file lock on the registry lock file.
+///
+/// The returned `File` holds the lock; dropping it releases the lock.
+/// Callers must hold this lock for the entire load-modify-save cycle.
+fn lock_registry(config: &WorkspaceConfig) -> Result<std::fs::File, WitPluginError> {
+    let lock_path = config.base_dir.join("config/worktree-registry.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| WitPluginError::internal(format!("cannot create config dir: {e}")))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| WitPluginError::internal(format!("cannot open registry lock file: {e}")))?;
+    file.lock_exclusive()
+        .map_err(|e| WitPluginError::internal(format!("cannot acquire registry lock: {e}")))?;
+    Ok(file)
+}
+
 pub fn load_registry(config: &WorkspaceConfig) -> Result<WorktreeRegistry, WitPluginError> {
     let path = registry_path(config);
     if !path.exists() {
-        tracing::debug!(plugin = "coding-pack", "worktree registry file not found, returning empty");
+        tracing::debug!(
+            plugin = "coding-pack",
+            "worktree registry file not found, returning empty"
+        );
         return Ok(WorktreeRegistry::default());
     }
     let content = std::fs::read_to_string(&path)
         .map_err(|e| WitPluginError::internal(format!("cannot read worktree registry: {e}")))?;
     let registry: WorktreeRegistry = serde_json::from_str(&content)
         .map_err(|e| WitPluginError::internal(format!("cannot parse worktree registry: {e}")))?;
-    tracing::debug!(plugin = "coding-pack", entries = registry.entries.len(), "loaded worktree registry");
+    tracing::debug!(
+        plugin = "coding-pack",
+        entries = registry.entries.len(),
+        "loaded worktree registry"
+    );
     Ok(registry)
 }
 
@@ -81,6 +110,7 @@ pub fn register_worktree(
     task_id: &str,
     workflow_id: &str,
 ) -> Result<(), WitPluginError> {
+    let _lock = lock_registry(config)?;
     let mut registry = load_registry(config)?;
 
     let now = now_iso8601();
@@ -115,6 +145,7 @@ pub fn update_worktree_status(
     worktree_path: &str,
     new_status: WorktreeStatus,
 ) -> Result<(), WitPluginError> {
+    let _lock = lock_registry(config)?;
     let mut registry = load_registry(config)?;
 
     let entry = registry
@@ -225,7 +256,11 @@ fn remove_git_worktree(
         || stderr.contains("is not a valid")
         || !std::path::Path::new(worktree_path).exists()
     {
-        tracing::debug!(plugin = "coding-pack", path = worktree_path, "worktree already removed");
+        tracing::debug!(
+            plugin = "coding-pack",
+            path = worktree_path,
+            "worktree already removed"
+        );
         return Ok(());
     }
 
@@ -236,10 +271,7 @@ fn remove_git_worktree(
     )))
 }
 
-fn delete_git_branch(
-    config: &WorkspaceConfig,
-    branch_name: &str,
-) -> Result<(), WitPluginError> {
+fn delete_git_branch(config: &WorkspaceConfig, branch_name: &str) -> Result<(), WitPluginError> {
     let output = std::process::Command::new("git")
         .args(["branch", "-d", branch_name])
         .current_dir(&config.base_dir)
@@ -259,9 +291,11 @@ fn delete_git_branch(
 }
 
 fn cleanup_single_worktree(config: &WorkspaceConfig, entry: &WorktreeEntry) -> CleanupOutcome {
+    let path_existed = std::path::Path::new(&entry.worktree_path).exists();
+
     match remove_git_worktree(config, &entry.worktree_path) {
         Ok(()) => {
-            // Worktree removed (or already gone) — try branch cleanup
+            // Try branch cleanup regardless
             if let Err(e) = delete_git_branch(config, &entry.branch_name) {
                 tracing::warn!(
                     plugin = "coding-pack",
@@ -270,7 +304,11 @@ fn cleanup_single_worktree(config: &WorkspaceConfig, entry: &WorktreeEntry) -> C
                     "branch deletion error during cleanup — non-fatal"
                 );
             }
-            CleanupOutcome::Removed
+            if path_existed {
+                CleanupOutcome::Removed
+            } else {
+                CleanupOutcome::AlreadyGone
+            }
         }
         Err(e) => CleanupOutcome::Error(e.message),
     }
@@ -279,6 +317,7 @@ fn cleanup_single_worktree(config: &WorkspaceConfig, entry: &WorktreeEntry) -> C
 pub fn cleanup_completed_worktrees(
     config: &WorkspaceConfig,
 ) -> Result<CleanupResult, WitPluginError> {
+    let _lock = lock_registry(config)?;
     let registry = load_registry(config)?;
     let mut result = CleanupResult {
         removed: 0,
@@ -426,9 +465,7 @@ fn parse_porcelain_worktree_list(output: &str) -> Vec<GitWorktreeInfo> {
         } else if let Some(head) = line.strip_prefix("HEAD ") {
             current_head = head.to_string();
         } else if let Some(branch_ref) = line.strip_prefix("branch ") {
-            let branch_name = branch_ref
-                .strip_prefix("refs/heads/")
-                .unwrap_or(branch_ref);
+            let branch_name = branch_ref.strip_prefix("refs/heads/").unwrap_or(branch_ref);
             current_branch = Some(branch_name.to_string());
         } else if line == "bare" {
             current_bare = true;
@@ -460,9 +497,13 @@ fn extract_ids_from_branch(branch: &str) -> Option<(String, String)> {
     Some((workflow_id, task_id))
 }
 
-pub fn detect_untracked_worktrees(
-    config: &WorkspaceConfig,
-) -> Result<u32, WitPluginError> {
+pub fn detect_untracked_worktrees(config: &WorkspaceConfig) -> Result<u32, WitPluginError> {
+    let _lock = lock_registry(config)?;
+    detect_untracked_worktrees_locked(config)
+}
+
+/// Inner implementation that assumes the caller already holds the registry lock.
+fn detect_untracked_worktrees_locked(config: &WorkspaceConfig) -> Result<u32, WitPluginError> {
     let git_worktrees = list_git_worktrees(config)?;
     let mut registry = load_registry(config)?;
     let mut count = 0u32;
@@ -511,7 +552,11 @@ pub fn detect_untracked_worktrees(
     if count > 0 {
         save_registry(config, &registry)?;
     }
-    tracing::info!(plugin = "coding-pack", detected = count, "detected untracked auto-dev worktrees");
+    tracing::info!(
+        plugin = "coding-pack",
+        detected = count,
+        "detected untracked auto-dev worktrees"
+    );
     Ok(count)
 }
 
@@ -520,11 +565,13 @@ pub fn detect_untracked_worktrees(
 pub fn recover_orphaned_worktrees(
     config: &WorkspaceConfig,
 ) -> Result<RecoveryResult, WitPluginError> {
+    let _lock = lock_registry(config)?;
+
     // Step 1: Prune git worktree metadata
     run_git_worktree_prune(config)?;
 
-    // Step 2: Detect untracked worktrees
-    let detected_untracked = detect_untracked_worktrees(config)?;
+    // Step 2: Detect untracked worktrees (use locked variant to avoid deadlock)
+    let detected_untracked = detect_untracked_worktrees_locked(config)?;
 
     // Step 3: Mark old failed entries as orphaned
     let mut registry = load_registry(config)?;
@@ -606,9 +653,7 @@ fn is_old_enough_for_orphan(created_at: &str) -> bool {
 
 // ── Status reporting ────────────────────────────────────────────────────────
 
-pub fn worktree_status(
-    config: &WorkspaceConfig,
-) -> Result<serde_json::Value, WitPluginError> {
+pub fn worktree_status(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
     let registry = load_registry(config)?;
 
     let mut worktrees = Vec::new();
@@ -665,7 +710,10 @@ pub(crate) fn parse_iso8601_to_epoch(ts: &str) -> Option<u64> {
     } else {
         [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
-    for dim in days_in_months.iter().take((month as usize).saturating_sub(1)) {
+    for dim in days_in_months
+        .iter()
+        .take((month as usize).saturating_sub(1))
+    {
         total_days += *dim as i64;
     }
     total_days += (day.saturating_sub(1)) as i64;
@@ -769,8 +817,14 @@ mod tests {
     fn test_register_and_load_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let config = temp_config(tmp.path());
-        register_worktree(&config, "/tmp/wt/task-1", "auto-dev/coding/task-1", "task-1", "coding")
-            .unwrap();
+        register_worktree(
+            &config,
+            "/tmp/wt/task-1",
+            "auto-dev/coding/task-1",
+            "task-1",
+            "coding",
+        )
+        .unwrap();
         let registry = load_registry(&config).unwrap();
         assert_eq!(registry.entries.len(), 1);
         assert_eq!(registry.entries[0].worktree_path, "/tmp/wt/task-1");
@@ -866,7 +920,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         init_git_repo(tmp.path());
         let config = temp_config(tmp.path());
-        register_worktree(&config, "/nonexistent/wt/task-1", "branch-1", "task-1", "wf").unwrap();
+        register_worktree(
+            &config,
+            "/nonexistent/wt/task-1",
+            "branch-1",
+            "task-1",
+            "wf",
+        )
+        .unwrap();
         update_worktree_status(&config, "/nonexistent/wt/task-1", WorktreeStatus::Completed)
             .unwrap();
         let result = cleanup_completed_worktrees(&config).unwrap();
@@ -1011,13 +1072,11 @@ branch refs/heads/feature/my-thing
 
     #[test]
     fn test_extract_task_and_workflow_from_branch() {
-        let (wf, task) =
-            extract_ids_from_branch("auto-dev/coding-story-dev/task-42").unwrap();
+        let (wf, task) = extract_ids_from_branch("auto-dev/coding-story-dev/task-42").unwrap();
         assert_eq!(wf, "coding-story-dev");
         assert_eq!(task, "task-42");
 
-        let (wf, task) =
-            extract_ids_from_branch("auto-dev/coding-bug-fix/task-99").unwrap();
+        let (wf, task) = extract_ids_from_branch("auto-dev/coding-bug-fix/task-99").unwrap();
         assert_eq!(wf, "coding-bug-fix");
         assert_eq!(task, "task-99");
 
@@ -1167,8 +1226,6 @@ branch refs/heads/feature/my-thing
             month += 1;
         }
         let day = remaining_days + 1;
-        format!(
-            "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z"
-        )
+        format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
     }
 }

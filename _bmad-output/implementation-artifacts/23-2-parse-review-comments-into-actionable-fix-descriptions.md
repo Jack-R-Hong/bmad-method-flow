@@ -1,6 +1,6 @@
 # Story 23.2: Parse Review Comments into Actionable Fix Descriptions
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -24,16 +24,16 @@ So that the fix workflow receives clear, structured context for what needs to ch
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Define `FixContext` and related types in `src/github_client.rs` (AC: 1, 2, 6)
-  - [ ] 1.1 Define `FixContext` struct with `#[derive(Debug, Clone, Serialize, Deserialize)]`: `pr_number: u64`, `branch: String`, `base_branch: String`, `html_url: String`, `review_summary: String`, `file_comments: Vec<FileCommentGroup>`
-  - [ ] 1.2 Define `FileCommentGroup` struct: `file_path: String`, `comments: Vec<InlineComment>`
-  - [ ] 1.3 Define `InlineComment` struct: `line_number: Option<u32>`, `diff_hunk: String`, `reviewer_comment: String`, `reviewer: String`
+- [x] Task 1: Define `FixContext` and related types in `src/github_client.rs` (AC: 1, 2, 6)
+  - [x]1.1 Define `FixContext` struct with `#[derive(Debug, Clone, Serialize, Deserialize)]`: `pr_number: u64`, `branch: String`, `base_branch: String`, `html_url: String`, `review_summary: String`, `file_comments: Vec<FileCommentGroup>`
+  - [x]1.2 Define `FileCommentGroup` struct: `file_path: String`, `comments: Vec<InlineComment>`
+  - [x]1.3 Define `InlineComment` struct: `line_number: Option<u32>`, `diff_hunk: String`, `reviewer_comment: String`, `reviewer: String`
 
-- [ ] Task 2: Implement `build_fix_context(pr_number)` on `GitHubClient` (AC: 1, 2, 3, 4, 5)
-  - [ ] 2.1 Call `self.list_pr_reviews(pr_number)?` to get all reviews
-  - [ ] 2.2 Call `self.get_review_comments(pr_number)?` to get all inline comments
-  - [ ] 2.3 Fetch the PR details to get `head.ref` (branch) and `base.ref` (base branch) -- call a new `fn get_pull_request(&self, pr_number: u64) -> Result<PullRequest, WitPluginError>` that GETs `/repos/{owner}/{repo}/pulls/{pr_number}`
-  - [ ] 2.4 Build `review_summary` from reviews with `state == "CHANGES_REQUESTED"`:
+- [x] Task 2: Implement `build_fix_context(pr_number)` on `GitHubClient` (AC: 1, 2, 3, 4, 5)
+  - [x]2.1 Call `self.list_pr_reviews(pr_number)?` to get all reviews
+  - [x]2.2 Call `self.get_review_comments(pr_number)?` to get all inline comments
+  - [x]2.3 Fetch the PR details to get `head.ref` (branch) and `base.ref` (base branch) -- call a new `fn get_pull_request(&self, pr_number: u64) -> Result<PullRequest, WitPluginError>` that GETs `/repos/{owner}/{repo}/pulls/{pr_number}`
+  - [x]2.4 Build `review_summary` from reviews with `state == "CHANGES_REQUESTED"`:
     ```
     Reviewer: alice
     Please refactor the error handling to use the new pattern.
@@ -43,35 +43,35 @@ So that the fix workflow receives clear, structured context for what needs to ch
     Reviewer: bob
     The test coverage is insufficient for the edge case.
     ```
-  - [ ] 2.5 Build `file_comments` by grouping `PrReviewComment` entries by `path`:
+  - [x]2.5 Build `file_comments` by grouping `PrReviewComment` entries by `path`:
     - Create a `BTreeMap<String, Vec<InlineComment>>` for natural sort order by file path
     - Map each `PrReviewComment` to `InlineComment { line_number: comment.line, diff_hunk: comment.diff_hunk, reviewer_comment: comment.body, reviewer: comment.user.login }`
     - Within each file group, sort by `line_number` (ascending, `None` before `Some`)
-  - [ ] 2.6 Assemble and return `FixContext`
-  - [ ] 2.7 If no `CHANGES_REQUESTED` reviews and no inline comments, return a `FixContext` with empty `review_summary` and empty `file_comments`
+  - [x]2.6 Assemble and return `FixContext`
+  - [x]2.7 If no `CHANGES_REQUESTED` reviews and no inline comments, return a `FixContext` with empty `review_summary` and empty `file_comments`
 
-- [ ] Task 3: Implement `get_pull_request(pr_number)` on `GitHubClient` (AC: 1)
-  - [ ] 3.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}`
-  - [ ] 3.2 Parse response as `PullRequest`
-  - [ ] 3.3 This is a single-object GET -- no pagination needed
+- [x] Task 3: Implement `get_pull_request(pr_number)` on `GitHubClient` (AC: 1)
+  - [x]3.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}`
+  - [x]3.2 Parse response as `PullRequest`
+  - [x]3.3 This is a single-object GET -- no pagination needed
 
-- [ ] Task 4: Add `build-fix-context` action to `src/pack.rs` (AC: 6)
-  - [ ] 4.1 Add match arm: `"build-fix-context" => build_fix_context_value(&config, input.payload.as_ref())`
-  - [ ] 4.2 Extract `pr_number` from `input.payload` (required field): `payload.get("pr_number").and_then(|v| v.as_u64())`
-  - [ ] 4.3 Return error if `pr_number` missing: `WitPluginError::invalid_input("build-fix-context requires 'pr_number' in payload")`
-  - [ ] 4.4 Call `GitHubClient::new()?.build_fix_context(pr_number)?`
-  - [ ] 4.5 Serialize `FixContext` to JSON via `serde_json::to_value()`
-  - [ ] 4.6 Update the `other =>` error message to include `"build-fix-context"` in available actions
+- [x] Task 4: Add `build-fix-context` action to `src/pack.rs` (AC: 6)
+  - [x]4.1 Add match arm: `"build-fix-context" => build_fix_context_value(&config, input.payload.as_ref())`
+  - [x]4.2 Extract `pr_number` from `input.payload` (required field): `payload.get("pr_number").and_then(|v| v.as_u64())`
+  - [x]4.3 Return error if `pr_number` missing: `WitPluginError::invalid_input("build-fix-context requires 'pr_number' in payload")`
+  - [x]4.4 Call `GitHubClient::new()?.build_fix_context(pr_number)?`
+  - [x]4.5 Serialize `FixContext` to JSON via `serde_json::to_value()`
+  - [x]4.6 Update the `other =>` error message to include `"build-fix-context"` in available actions
 
-- [ ] Task 5: Write unit tests (AC: 1, 2, 3, 4, 5)
-  - [ ] 5.1 `test_fix_context_serialization_roundtrip` -- create a `FixContext` with sample data, serialize to JSON, deserialize back, assert equality
-  - [ ] 5.2 `test_review_summary_formatting` -- verify multi-reviewer summary format with `"---"` separator
-  - [ ] 5.3 `test_file_comments_grouped_by_path` -- verify comments on same file are grouped together
-  - [ ] 5.4 `test_file_comments_sorted_by_line` -- verify comments within a file are sorted by line number ascending
-  - [ ] 5.5 `test_none_line_sorts_first` -- verify comments with `line_number: None` appear before those with `Some`
-  - [ ] 5.6 `test_empty_fix_context_when_no_changes_requested` -- verify empty context when all reviews are APPROVED
-  - [ ] 5.7 `test_multiple_reviewers_merged_by_file` -- verify comments from different reviewers on the same file appear in the same `FileCommentGroup`
-  - [ ] 5.8 In `src/pack.rs`: `test_build_fix_context_action_recognized` -- verify action is in the dispatch table (returns `invalid_input` for missing pr_number, not `not_found`)
+- [x] Task 5: Write unit tests (AC: 1, 2, 3, 4, 5)
+  - [x]5.1 `test_fix_context_serialization_roundtrip` -- create a `FixContext` with sample data, serialize to JSON, deserialize back, assert equality
+  - [x]5.2 `test_review_summary_formatting` -- verify multi-reviewer summary format with `"---"` separator
+  - [x]5.3 `test_file_comments_grouped_by_path` -- verify comments on same file are grouped together
+  - [x]5.4 `test_file_comments_sorted_by_line` -- verify comments within a file are sorted by line number ascending
+  - [x]5.5 `test_none_line_sorts_first` -- verify comments with `line_number: None` appear before those with `Some`
+  - [x]5.6 `test_empty_fix_context_when_no_changes_requested` -- verify empty context when all reviews are APPROVED
+  - [x]5.7 `test_multiple_reviewers_merged_by_file` -- verify comments from different reviewers on the same file appear in the same `FileCommentGroup`
+  - [x]5.8 In `src/pack.rs`: `test_build_fix_context_action_recognized` -- verify action is in the dispatch table (returns `invalid_input` for missing pr_number, not `not_found`)
 
 ## Dev Notes
 
@@ -245,9 +245,23 @@ All required crates already in `Cargo.toml`. The `std::collections::BTreeMap` is
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- `FixContext`, `FileCommentGroup`, `InlineComment` types added in `src/github_client.rs`
+- `build_fix_context()` method assembles review summary and groups inline comments by file path
+- `get_pull_request()` helper fetches single PR by number
+- `build-fix-context` action wired in `src/pack.rs` with payload pr_number extraction
+- BTreeMap used for deterministic file path ordering
+- Comments within each file sorted by line_number (None sorts first as 0)
+- 8 unit tests covering serialization roundtrip, grouping, sorting, and edge cases
 
 ### File List
+- `src/github_client.rs` -- FixContext types, build_fix_context(), get_pull_request()
+- `src/pack.rs` -- build-fix-context action
+
+### Change Log
+- 2026-03-28: Story 23-2 implemented (all 5 tasks complete, co-implemented with 23-1)

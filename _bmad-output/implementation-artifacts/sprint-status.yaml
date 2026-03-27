@@ -1,5 +1,5 @@
 # generated: 2026-03-18
-# last_updated: 2026-03-27
+# last_updated: 2026-03-29
 # project: bmad-method-flow
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-18
-last_updated: 2026-03-27
+last_updated: 2026-03-29
 project: bmad-method-flow
 project_key: NOKEY
 tracking_system: file-system
@@ -129,45 +129,48 @@ development_status:
   # ============================================================
 
   # Epic 12: BMAD Agent Registry and Discovery
-  epic-12: in-progress
-  12-1-create-bmadagentregistry-struct-with-agent-definition-constants: ready-for-dev
-  12-2-implement-agentdefinitionprovider-trait-on-bmadagentregistry: ready-for-dev
-  12-3-add-unit-tests-for-agent-registry-completeness-and-correctness: ready-for-dev
+  # NOTE: Covered by existing agent_registry.rs implementation (CSV-based, not hardcoded constants)
+  epic-12: done
+  12-1-create-bmadagentregistry-struct-with-agent-definition-constants: done
+  12-2-implement-agentdefinitionprovider-trait-on-bmadagentregistry: done
+  12-3-add-unit-tests-for-agent-registry-completeness-and-correctness: done
   epic-12-retrospective: optional
 
   # Epic 13: Agent Mesh Configuration and Depth Guard
-  epic-13: in-progress
-  13-1-add-agentmeshsettings-to-workspace-configuration: ready-for-dev
-  13-2-implement-depth-guard-check-in-executor: ready-for-dev
-  13-3-inject-agent-mesh-config-into-json-rpc-parameters: ready-for-dev
+  # NOTE: Covered by Epic 25 (Stories 25.1, 25.2, 25.3)
+  epic-13: done
+  13-1-add-agentmeshsettings-to-workspace-configuration: done
+  13-2-implement-depth-guard-check-in-executor: done
+  13-3-inject-agent-mesh-config-into-json-rpc-parameters: done
   epic-13-retrospective: optional
 
   # Epic 14: Tool Calling Support and Unified LLM Types
-  epic-14: in-progress
-  14-1-adopt-sdk-llm-types-for-internal-request-and-response-construction: ready-for-dev
-  14-2-forward-tool-definitions-from-step-config-to-llm-provider: ready-for-dev
+  epic-14: done
+  14-1-adopt-sdk-llm-types-for-internal-request-and-response-construction: done
+  14-2-forward-tool-definitions-from-step-config-to-llm-provider: done
   epic-14-retrospective: optional
 
   # Epic 15: Multi-Agent Session Deliberation
-  epic-15: in-progress
-  15-1-define-session-configuration-types-and-parsing: ready-for-dev
-  15-2-implement-session-turn-loop-with-activation-evaluation: ready-for-dev
-  15-3-implement-convergence-evaluation-and-session-output: ready-for-dev
-  15-4-integrate-session-step-type-into-executor-dispatch: ready-for-dev
+  epic-15: done
+  15-1-define-session-configuration-types-and-parsing: done
+  15-2-implement-session-turn-loop-with-activation-evaluation: done
+  15-3-implement-convergence-evaluation-and-session-output: done
+  15-4-integrate-session-step-type-into-executor-dispatch: done
   epic-15-retrospective: optional
 
   # Epic 16: Agent Mesh ACL Generation and Pack Actions
-  epic-16: in-progress
-  16-1-implement-generate-agents-yaml-pack-action: ready-for-dev
-  16-2-implement-list-agents-pack-action: ready-for-dev
-  16-3-define-acl-rules-as-constants-in-agent-registry: ready-for-dev
+  # NOTE: Covered by Epic 25 (Stories 25.4, 25.5, 25.6)
+  epic-16: done
+  16-1-implement-generate-agents-yaml-pack-action: done
+  16-2-implement-list-agents-pack-action: done
+  16-3-define-acl-rules-as-constants-in-agent-registry: done
   epic-16-retrospective: optional
 
   # Epic 17: Module Wiring, Validation, and Workflow Integration
-  epic-17: in-progress
-  17-1-wire-new-modules-into-crate-root-and-plugin-trait: ready-for-dev
-  17-2-extend-validator-for-session-step-configs-and-agents-yaml: ready-for-dev
-  17-3-update-workflow-yaml-templates-with-session-and-mesh-features: ready-for-dev
+  epic-17: done
+  17-1-wire-new-modules-into-crate-root-and-plugin-trait: done
+  17-2-extend-validator-for-session-step-configs-and-agents-yaml: done
+  17-3-update-workflow-yaml-templates-with-session-and-mesh-features: done
   epic-17-retrospective: optional
 
   # ============================================================
@@ -209,34 +212,34 @@ development_status:
   # ============================================================
 
   # Epic 22: GitHub Issue-Driven Task Intake
-  epic-22: in-progress
-  22-1-implement-github-rest-api-client-for-issue-operations: review
-  22-2-sync-github-issues-to-plugin-board-as-tasks: review
-  22-3-filter-issues-by-label-and-milestone-for-selective-sync: review
-  22-4-auto-link-prs-to-source-github-issues: review
+  epic-22: done
+  22-1-implement-github-rest-api-client-for-issue-operations: done
+  22-2-sync-github-issues-to-plugin-board-as-tasks: done
+  22-3-filter-issues-by-label-and-milestone-for-selective-sync: done
+  22-4-auto-link-prs-to-source-github-issues: done
   epic-22-retrospective: optional
 
   # Epic 23: PR Review Feedback Loop
-  epic-23: in-progress
-  23-1-monitor-pr-review-status-via-github-api: ready-for-dev
-  23-2-parse-review-comments-into-actionable-fix-descriptions: ready-for-dev
-  23-3-create-coding-pr-fix-workflow-template: ready-for-dev
-  23-4-integrate-pr-feedback-loop-into-auto-dev-cycle: ready-for-dev
+  epic-23: done
+  23-1-monitor-pr-review-status-via-github-api: done
+  23-2-parse-review-comments-into-actionable-fix-descriptions: done
+  23-3-create-coding-pr-fix-workflow-template: done
+  23-4-integrate-pr-feedback-loop-into-auto-dev-cycle: done
   epic-23-retrospective: optional
 
   # Epic 24: Worktree Lifecycle Management
-  epic-24: in-progress
-  24-1-implement-worktree-ownership-tracking: review
-  24-2-auto-cleanup-worktrees-on-completion-and-merge: review
-  24-3-recover-orphaned-worktrees-and-report-status: review
+  epic-24: done
+  24-1-implement-worktree-ownership-tracking: done
+  24-2-auto-cleanup-worktrees-on-completion-and-merge: done
+  24-3-recover-orphaned-worktrees-and-report-status: done
   epic-24-retrospective: optional
 
   # Epic 25: Agent Mesh Safety Guards
-  epic-25: in-progress
-  25-1-add-agentmeshsettings-to-workspace-configuration: ready-for-dev
-  25-2-implement-depth-guard-check-in-executor: ready-for-dev
-  25-3-inject-agent-mesh-config-into-json-rpc-parameters: ready-for-dev
-  25-4-define-acl-rules-in-agent-registry: ready-for-dev
-  25-5-implement-generate-agents-yaml-pack-action: ready-for-dev
-  25-6-refactor-list-agents-action-to-use-registry: ready-for-dev
+  epic-25: done
+  25-1-add-agentmeshsettings-to-workspace-configuration: done
+  25-2-implement-depth-guard-check-in-executor: done
+  25-3-inject-agent-mesh-config-into-json-rpc-parameters: done
+  25-4-define-acl-rules-in-agent-registry: done
+  25-5-implement-generate-agents-yaml-pack-action: done
+  25-6-refactor-list-agents-action-to-use-registry: done
   epic-25-retrospective: optional

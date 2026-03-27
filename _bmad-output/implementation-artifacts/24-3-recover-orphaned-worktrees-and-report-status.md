@@ -1,6 +1,6 @@
 # Story 24.3: Recover Orphaned Worktrees and Report Status
 
-Status: review
+Status: done
 
 ## Story
 

@@ -2,7 +2,7 @@
 
 **Epic:** 25 — Agent Mesh Safety Guards
 **Story ID:** 25.1
-**Status:** ready-for-dev
+**Status:** done
 
 ## Story
 
@@ -20,27 +20,27 @@ so that I can control mesh behavior (enable/disable, max depth, agents.yaml path
 
 ## Tasks / Subtasks
 
-- [ ] Add `AgentMeshSettings` struct to `src/workspace.rs` (AC: #1)
-  - [ ] Define struct with `enabled: bool`, `max_depth: u32`, `agents_yaml_path: Option<String>`
-  - [ ] Add `#[derive(Debug, Clone, Deserialize)]` (implement `Default` manually)
-  - [ ] Add `#[serde(default)]` on `enabled`
-  - [ ] Add `#[serde(default = "default_max_depth")]` on `max_depth`
-  - [ ] Add `#[serde(default)]` on `agents_yaml_path`
-  - [ ] Add free function `fn default_max_depth() -> u32 { 5 }`
-  - [ ] Implement `Default` manually: `enabled: false, max_depth: 5, agents_yaml_path: None`
-- [ ] Extend `WorkspaceConfig` with `agent_mesh` field (AC: #2)
-  - [ ] Add `pub agent_mesh: AgentMeshSettings` field to `WorkspaceConfig`
-  - [ ] Wire into `from_base_dir()`: extract `yaml.agent_mesh` and use `.unwrap_or_default()` to pass to `WorkspaceConfig`
-  - [ ] Set `agent_mesh: AgentMeshSettings::default()` in `default_for()` fallback
-- [ ] Extend `ConfigYaml` with `agent_mesh` field (AC: #5)
-  - [ ] Add `#[serde(default)] agent_mesh: Option<AgentMeshSettings>` field to `ConfigYaml`
-- [ ] Add unit tests (AC: #3, #4)
-  - [ ] Test: config YAML without `agent_mesh` section parses successfully, `agent_mesh` has default values
-  - [ ] Test: config YAML with `agent_mesh: { enabled: true, max_depth: 3 }` parses correctly
-  - [ ] Test: config YAML with `agent_mesh: {}` parses with defaults (enabled=false, max_depth=5)
-  - [ ] Test: config YAML with `agent_mesh: { enabled: true, max_depth: 3, agents_yaml_path: "custom/agents.yaml" }` parses all three fields
-  - [ ] Test: existing backward-compatibility test (`config_yaml_backward_compatible`) still passes
-- [ ] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
+- [x] Add `AgentMeshSettings` struct to `src/workspace.rs` (AC: #1)
+  - [x] Define struct with `enabled: bool`, `max_depth: u32`, `agents_yaml_path: Option<String>`
+  - [x] Add `#[derive(Debug, Clone, Deserialize)]` (implement `Default` manually)
+  - [x] Add `#[serde(default)]` on `enabled`
+  - [x] Add `#[serde(default = "default_max_depth")]` on `max_depth`
+  - [x] Add `#[serde(default)]` on `agents_yaml_path`
+  - [x] Add free function `fn default_max_depth() -> u32 { 5 }`
+  - [x] Implement `Default` manually: `enabled: false, max_depth: 5, agents_yaml_path: None`
+- [x] Extend `WorkspaceConfig` with `agent_mesh` field (AC: #2)
+  - [x] Add `pub agent_mesh: AgentMeshSettings` field to `WorkspaceConfig`
+  - [x] Wire into `from_base_dir()`: extract `yaml.agent_mesh` and use `.unwrap_or_default()` to pass to `WorkspaceConfig`
+  - [x] Set `agent_mesh: AgentMeshSettings::default()` in `default_for()` fallback
+- [x] Extend `ConfigYaml` with `agent_mesh` field (AC: #5)
+  - [x] Add `#[serde(default)] agent_mesh: Option<AgentMeshSettings>` field to `ConfigYaml`
+- [x] Add unit tests (AC: #3, #4)
+  - [x] Test: config YAML without `agent_mesh` section parses successfully, `agent_mesh` has default values
+  - [x] Test: config YAML with `agent_mesh: { enabled: true, max_depth: 3 }` parses correctly
+  - [x] Test: config YAML with `agent_mesh: {}` parses with defaults (enabled=false, max_depth=5)
+  - [x] Test: config YAML with `agent_mesh: { enabled: true, max_depth: 3, agents_yaml_path: "custom/agents.yaml" }` parses all three fields
+  - [x] Test: existing backward-compatibility test (`config_yaml_backward_compatible`) still passes
+- [x] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
 
 ## Dev Notes
 
@@ -131,9 +131,17 @@ This story covers the same scope as Story 13.1 from the SDK Integration epics (`
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Added AgentMeshSettings struct with enabled, max_depth, agents_yaml_path fields
+- Manual Default impl ensures max_depth=5 matches serde default_max_depth()
+- Wired into WorkspaceConfig (non-Option), ConfigYaml (Option), from_base_dir(), default_for()
+- All 24 workspace tests pass including 5 new agent_mesh tests
+- cargo clippy -- -D warnings passes clean
 
 ### File List
+- src/workspace.rs

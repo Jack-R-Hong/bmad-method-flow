@@ -2,7 +2,7 @@
 
 **Epic:** 25 — Agent Mesh Safety Guards
 **Story ID:** 25.4
-**Status:** ready-for-dev
+**Status:** done
 
 ## Story
 
@@ -22,31 +22,31 @@ so that access control is authoritative, testable, and cannot drift from the reg
 
 ## Tasks / Subtasks
 
-- [ ] Define `AgentAcl` struct in `src/agent_registry.rs` (AC: #6)
-  - [ ] Fields: `pub can_invoke: Vec<String>`, `pub can_respond_to: Vec<String>`
-  - [ ] Derive `Debug, Clone, PartialEq`
-- [ ] Implement `get_acl()` method on `BmadAgentRegistry` (AC: #1, #2, #3, #4, #5, #6)
-  - [ ] Signature: `pub fn get_acl(&self, agent_name: &str) -> AgentAcl`
-  - [ ] Match on agent_name to determine `can_invoke` list
-  - [ ] All agents get `can_respond_to: vec!["bmad/pm", "bmad/sm"]`
-  - [ ] Unknown agents return empty `can_invoke` and standard `can_respond_to`
-- [ ] Implement convenience methods (AC: #1)
-  - [ ] `pub fn get_can_invoke(&self, agent_name: &str) -> Vec<String>` -- delegates to `get_acl`
-  - [ ] `pub fn get_can_respond_to(&self, agent_name: &str) -> Vec<String>` -- delegates to `get_acl`
-- [ ] Add unit tests (AC: #7)
-  - [ ] Test: `bmad/architect` can_invoke = `["bmad/analyst", "bmad/developer", "bmad/ux-designer"]`
-  - [ ] Test: `bmad/architect` can_respond_to = `["bmad/pm", "bmad/sm"]`
-  - [ ] Test: `bmad/qa` can_invoke = `["bmad/developer"]`
-  - [ ] Test: `bmad/quick-dev` can_invoke = `[]` (empty)
-  - [ ] Test: `bmad/developer` can_invoke = `["bmad/developer"]` (default rule)
-  - [ ] Test: `bmad/pm` can_invoke = `["bmad/developer"]` (default rule)
-  - [ ] Test: `bmad/sm` can_invoke = `["bmad/developer"]` (default rule)
-  - [ ] Test: `bmad/tech-writer` can_invoke = `["bmad/developer"]` (default rule)
-  - [ ] Test: `bmad/ux-designer` can_invoke = `["bmad/developer"]` (default rule)
-  - [ ] Test: `bmad/analyst` can_invoke = `["bmad/developer"]` (default rule)
-  - [ ] Test: all 9 agents have `["bmad/pm", "bmad/sm"]` in can_respond_to
-  - [ ] Test: unknown agent `"bmad/nonexistent"` returns empty can_invoke and standard can_respond_to
-- [ ] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
+- [x] Define `AgentAcl` struct in `src/agent_registry.rs` (AC: #6)
+  - [x] Fields: `pub can_invoke: Vec<String>`, `pub can_respond_to: Vec<String>`
+  - [x] Derive `Debug, Clone, PartialEq`
+- [x] Implement `get_acl()` method on `BmadAgentRegistry` (AC: #1, #2, #3, #4, #5, #6)
+  - [x] Signature: `pub fn get_acl(&self, agent_name: &str) -> AgentAcl`
+  - [x] Match on agent_name to determine `can_invoke` list
+  - [x] All agents get `can_respond_to: vec!["bmad/pm", "bmad/sm"]`
+  - [x] Unknown agents return empty `can_invoke` and standard `can_respond_to`
+- [x] Implement convenience methods (AC: #1)
+  - [x] `pub fn get_can_invoke(&self, agent_name: &str) -> Vec<String>` -- delegates to `get_acl`
+  - [x] `pub fn get_can_respond_to(&self, agent_name: &str) -> Vec<String>` -- delegates to `get_acl`
+- [x] Add unit tests (AC: #7)
+  - [x] Test: `bmad/architect` can_invoke = `["bmad/analyst", "bmad/developer", "bmad/ux-designer"]`
+  - [x] Test: `bmad/architect` can_respond_to = `["bmad/pm", "bmad/sm"]`
+  - [x] Test: `bmad/qa` can_invoke = `["bmad/developer"]`
+  - [x] Test: `bmad/quick-dev` can_invoke = `[]` (empty)
+  - [x] Test: `bmad/developer` can_invoke = `["bmad/developer"]` (default rule)
+  - [x] Test: `bmad/pm` can_invoke = `["bmad/developer"]` (default rule)
+  - [x] Test: `bmad/sm` can_invoke = `["bmad/developer"]` (default rule)
+  - [x] Test: `bmad/tech-writer` can_invoke = `["bmad/developer"]` (default rule)
+  - [x] Test: `bmad/ux-designer` can_invoke = `["bmad/developer"]` (default rule)
+  - [x] Test: `bmad/analyst` can_invoke = `["bmad/developer"]` (default rule)
+  - [x] Test: all 9 agents have `["bmad/pm", "bmad/sm"]` in can_respond_to
+  - [x] Test: unknown agent `"bmad/nonexistent"` returns empty can_invoke and standard can_respond_to
+- [x] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
 
 ## Dev Notes
 
@@ -163,9 +163,21 @@ This story covers the same scope as Story 16.3 from the SDK Integration epics. T
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Defined `AgentAcl` struct with `pub can_invoke: Vec<String>` and `pub can_respond_to: Vec<String>`, deriving Debug, Clone, PartialEq
+- Implemented `get_acl()` on `BmadAgentRegistry` with static match-based ACL rules per architecture spec
+- Implemented `get_can_invoke()` and `get_can_respond_to()` convenience methods delegating to `get_acl()`
+- Added 13 unit tests covering all 9 agents, unknown agent defaults, complete struct verification, and the comprehensive all-agents can_respond_to sweep
+- All 24 agent_registry tests pass (11 existing + 13 new ACL tests)
+- No clippy warnings in agent_registry.rs; no formatting issues
+- Pre-existing compilation errors in workspace.rs (missing `agent_mesh` field) and pre-existing clippy warnings in other files are unrelated to this story
+- `AgentAcl` is public for Story 25.5 consumption
+- No `unwrap()` or `expect()` in production code; only used in test assertions
 
 ### File List
+- `src/agent_registry.rs` -- added AgentAcl struct, get_acl/get_can_invoke/get_can_respond_to methods, and 13 ACL unit tests

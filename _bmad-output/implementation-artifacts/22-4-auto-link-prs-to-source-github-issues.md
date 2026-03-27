@@ -1,6 +1,6 @@
 # Story 22.4: Auto-link PRs to Source GitHub Issues
 
-Status: review
+Status: done
 
 ## Story
 

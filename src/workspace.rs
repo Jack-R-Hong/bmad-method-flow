@@ -22,6 +22,8 @@ pub struct WorkspaceConfig {
     pub auto_dev: AutoDevConfig,
     /// GitHub issue sync filtering settings.
     pub github_sync: GitHubSyncConfig,
+    /// Agent mesh settings for multi-agent invocation.
+    pub agent_mesh: AgentMeshSettings,
 }
 
 /// Controls which workflows are available in this workspace.
@@ -89,6 +91,34 @@ fn default_review_poll_interval() -> u64 {
     60
 }
 
+/// Agent mesh settings for multi-agent invocation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentMeshSettings {
+    /// Whether agent mesh is enabled for this workspace
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum recursion depth for agent-to-agent invocation
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u32,
+    /// Path to agents.yaml ACL file (relative to workspace base_dir)
+    #[serde(default)]
+    pub agents_yaml_path: Option<String>,
+}
+
+fn default_max_depth() -> u32 {
+    5
+}
+
+impl Default for AgentMeshSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_depth: default_max_depth(),
+            agents_yaml_path: None,
+        }
+    }
+}
+
 /// Auto-dev loop configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AutoDevConfig {
@@ -147,6 +177,9 @@ struct ConfigYaml {
     /// GitHub issue sync filtering
     #[serde(default)]
     github_sync: Option<GitHubSyncConfig>,
+    /// Agent mesh settings
+    #[serde(default)]
+    agent_mesh: Option<AgentMeshSettings>,
 }
 
 const DEFAULT_PLUGINS_DIR: &str = "config/plugins";
@@ -191,6 +224,7 @@ impl WorkspaceConfig {
                     use_injection_pipeline: yaml.use_injection_pipeline.unwrap_or(false),
                     auto_dev: yaml.auto_dev.unwrap_or_default(),
                     github_sync: yaml.github_sync.unwrap_or_default(),
+                    agent_mesh: yaml.agent_mesh.unwrap_or_default(),
                 };
             }
         }
@@ -210,6 +244,7 @@ impl WorkspaceConfig {
             use_injection_pipeline: false,
             auto_dev: AutoDevConfig::default(),
             github_sync: GitHubSyncConfig::default(),
+            agent_mesh: AgentMeshSettings::default(),
         }
     }
 
@@ -523,5 +558,76 @@ filter_milestone: "Sprint 5"
 "#;
         let parsed: GitHubSyncConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(parsed.review_poll_interval_secs, 60);
+    }
+
+    // ── AgentMeshSettings (Story 25-1) ─────────────────────────────
+
+    #[test]
+    fn test_agent_mesh_settings_default() {
+        let settings = AgentMeshSettings::default();
+        assert!(!settings.enabled);
+        assert_eq!(settings.max_depth, 5);
+        assert!(settings.agents_yaml_path.is_none());
+    }
+
+    #[test]
+    fn test_config_yaml_without_agent_mesh_parses() {
+        let yaml = r#"
+plugin_dir: "config/plugins"
+auto_dev:
+  max_retries: 2
+"#;
+        let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
+        assert!(parsed.agent_mesh.is_none());
+
+        // WorkspaceConfig should have default agent_mesh
+        let config = WorkspaceConfig::default();
+        assert!(!config.agent_mesh.enabled);
+        assert_eq!(config.agent_mesh.max_depth, 5);
+        assert!(config.agent_mesh.agents_yaml_path.is_none());
+    }
+
+    #[test]
+    fn test_config_yaml_with_agent_mesh_enabled_and_max_depth() {
+        let yaml = r#"
+plugin_dir: "config/plugins"
+agent_mesh:
+  enabled: true
+  max_depth: 3
+"#;
+        let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
+        let mesh = parsed.agent_mesh.expect("agent_mesh should be present");
+        assert!(mesh.enabled);
+        assert_eq!(mesh.max_depth, 3);
+        assert!(mesh.agents_yaml_path.is_none());
+    }
+
+    #[test]
+    fn test_config_yaml_with_agent_mesh_empty_section() {
+        let yaml = r#"
+plugin_dir: "config/plugins"
+agent_mesh: {}
+"#;
+        let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
+        let mesh = parsed.agent_mesh.expect("agent_mesh should be present");
+        assert!(!mesh.enabled);
+        assert_eq!(mesh.max_depth, 5);
+        assert!(mesh.agents_yaml_path.is_none());
+    }
+
+    #[test]
+    fn test_config_yaml_with_agent_mesh_all_fields() {
+        let yaml = r#"
+plugin_dir: "config/plugins"
+agent_mesh:
+  enabled: true
+  max_depth: 3
+  agents_yaml_path: "custom/agents.yaml"
+"#;
+        let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
+        let mesh = parsed.agent_mesh.expect("agent_mesh should be present");
+        assert!(mesh.enabled);
+        assert_eq!(mesh.max_depth, 3);
+        assert_eq!(mesh.agents_yaml_path.as_deref(), Some("custom/agents.yaml"));
     }
 }

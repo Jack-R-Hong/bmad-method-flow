@@ -4,22 +4,23 @@ pub mod auto_dev;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod board_client;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod github_client;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod github_sync;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod config_injector;
 pub mod executor;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod worktree_tracker;
+pub mod github_client;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod github_sync;
 pub mod pack;
 pub mod pulse_api;
+pub mod session;
 pub mod test_parser;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tool_provider;
 pub mod util;
 pub mod validator;
 pub mod workspace;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod worktree_tracker;
 
 use pulse_plugin_sdk::error::WitPluginError;
 use pulse_plugin_sdk::wit_traits::{DashboardExtensionPlugin, PluginLifecycle, StepExecutorPlugin};
@@ -481,13 +482,15 @@ mod tests {
         assert!(layout_types.contains(&"form"), "missing form layout");
         assert!(layout_types.contains(&"stream"), "missing stream layout");
 
-        let page_ids: Vec<&str> = pages
-            .iter()
-            .filter_map(|p| p["id"].as_str())
-            .collect();
+        let page_ids: Vec<&str> = pages.iter().filter_map(|p| p["id"].as_str()).collect();
         for expected in &[
-            "overview", "workflows", "workflow-detail", "agents",
-            "status", "execute", "logs",
+            "overview",
+            "workflows",
+            "workflow-detail",
+            "agents",
+            "status",
+            "execute",
+            "logs",
         ] {
             assert!(page_ids.contains(expected), "missing page: {expected}");
         }

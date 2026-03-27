@@ -2,7 +2,7 @@
 
 **Epic:** 25 — Agent Mesh Safety Guards
 **Story ID:** 25.2
-**Status:** ready-for-dev
+**Status:** done
 
 ## Story
 
@@ -21,24 +21,24 @@ so that infinite agent-to-agent recursion is prevented and runaway agent chains 
 
 ## Tasks / Subtasks
 
-- [ ] Add `check_depth_guard()` function to `src/executor.rs` (AC: #1, #2, #3, #4)
-  - [ ] Read `PULSE_AGENT_DEPTH` from `std::env::var()`, parse to `u32`, default to 0 on missing or parse failure
-  - [ ] Compute `next = current + 1`
-  - [ ] Read `max_depth` from `config.agent_mesh.max_depth` (direct field access since Story 25.1 makes it non-Option)
-  - [ ] If `next > max`, return `Err(WitPluginError::invalid_input(format!("agent mesh depth limit exceeded: {} > {}", next, max)))`
-  - [ ] Otherwise return `Ok(next)`
-- [ ] Integrate depth guard into `execute_step()` (AC: #6)
-  - [ ] Add `config: &WorkspaceConfig` parameter to `execute_step()` (requires updating the call site in `execute_workflow_steps()`)
-  - [ ] Call `check_depth_guard(config)?` at the start of the `"agent"` match arm, before dispatching to `execute_agent_step()` or `execute_bmad_agent_step()`
-  - [ ] Alternatively, call it inside `execute_agent_step()` itself -- choose the location that ensures it runs for ALL agent step variants
-- [ ] Add unit tests for depth guard (AC: #1, #2, #3, #4, #5)
-  - [ ] Test: no env var set -> returns Ok(1)
-  - [ ] Test: env var = "4", max_depth = 5 -> returns Ok(5)
-  - [ ] Test: env var = "5", max_depth = 5 -> returns Err (6 > 5)
-  - [ ] Test: env var = "abc" -> returns Ok(1) (treated as 0)
-  - [ ] Test: env var = "0" -> returns Ok(1)
-  - [ ] Test: custom max_depth via AgentMeshSettings (e.g., max_depth=3) is respected
-- [ ] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
+- [x] Add `check_depth_guard()` function to `src/executor.rs` (AC: #1, #2, #3, #4)
+  - [x] Read `PULSE_AGENT_DEPTH` from `std::env::var()`, parse to `u32`, default to 0 on missing or parse failure
+  - [x] Compute `next = current + 1`
+  - [x] Read `max_depth` from `config.agent_mesh.max_depth` (direct field access since Story 25.1 makes it non-Option)
+  - [x] If `next > max`, return `Err(WitPluginError::invalid_input(format!("agent mesh depth limit exceeded: {} > {}", next, max)))`
+  - [x] Otherwise return `Ok(next)`
+- [x] Integrate depth guard into `execute_step()` (AC: #6)
+  - [x] Add `config: &WorkspaceConfig` parameter to `execute_step()` (requires updating the call site in `execute_workflow_steps()`)
+  - [x] Call `check_depth_guard(config)?` at the start of the `"agent"` match arm, before dispatching to `execute_agent_step()` or `execute_bmad_agent_step()`
+  - [x] Alternatively, call it inside `execute_agent_step()` itself -- choose the location that ensures it runs for ALL agent step variants
+- [x] Add unit tests for depth guard (AC: #1, #2, #3, #4, #5)
+  - [x] Test: no env var set -> returns Ok(1)
+  - [x] Test: env var = "4", max_depth = 5 -> returns Ok(5)
+  - [x] Test: env var = "5", max_depth = 5 -> returns Err (6 > 5)
+  - [x] Test: env var = "abc" -> returns Ok(1) (treated as 0)
+  - [x] Test: env var = "0" -> returns Ok(1)
+  - [x] Test: custom max_depth via AgentMeshSettings (e.g., max_depth=3) is respected
+- [x] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
 
 ## Dev Notes
 
@@ -150,9 +150,18 @@ This story covers the same scope as Story 13.2 from the SDK Integration epics. E
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Added check_depth_guard() as pub(crate) in executor.rs using safe .ok().and_then().unwrap_or() chain
+- Threaded &WorkspaceConfig through execute_step() -> execute_agent_step() -> execute_bmad_agent_step() / execute_direct_agent_step()
+- Depth guard runs only when agent_mesh.enabled is true, before dispatching agent steps
+- Used _workspace_config in inner functions (prefixed with underscore for now; Story 25-3 will use it)
+- 6 unit tests with ENV_MUTEX for thread-safe env var manipulation
+- All 267 tests pass, cargo clippy -- -D warnings clean
 
 ### File List
+- src/executor.rs

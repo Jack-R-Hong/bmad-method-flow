@@ -91,8 +91,7 @@ fn test_update_assignment_status() {
     } else {
         "review"
     };
-    board_client::update_assignment(&task.id, &serde_json::json!({"status": new_status}))
-        .unwrap();
+    board_client::update_assignment(&task.id, &serde_json::json!({"status": new_status})).unwrap();
 
     let updated = list_all()
         .into_iter()
@@ -101,11 +100,8 @@ fn test_update_assignment_status() {
     assert_eq!(updated.status, new_status);
 
     // Restore original status
-    board_client::update_assignment(
-        &task.id,
-        &serde_json::json!({"status": original_status}),
-    )
-    .unwrap();
+    board_client::update_assignment(&task.id, &serde_json::json!({"status": original_status}))
+        .unwrap();
 }
 
 // ── board_client::add_comment ──
@@ -125,9 +121,7 @@ fn test_add_comment() {
     let body = reqwest::blocking::get(&url).unwrap().text().unwrap();
     let val: serde_json::Value = serde_json::from_str(&body).unwrap();
     let task_val = val.get("task").unwrap_or(&val);
-    let meta = task_val
-        .get("metadata")
-        .expect("task should have metadata");
+    let meta = task_val.get("metadata").expect("task should have metadata");
     let comments = meta
         .get("comments")
         .and_then(|c| c.as_array())

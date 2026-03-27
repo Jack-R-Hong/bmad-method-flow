@@ -10,6 +10,15 @@ use pulse_plugin_sdk::SdkAgentDefinition;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Access control list for an agent in the mesh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentAcl {
+    /// Agent names this agent can invoke
+    pub can_invoke: Vec<String>,
+    /// Agent names this agent can respond to
+    pub can_respond_to: Vec<String>,
+}
+
 /// Agent data parsed from the CSV manifest.
 #[derive(Debug, Clone)]
 struct AgentEntry {
@@ -153,6 +162,40 @@ impl BmadAgentRegistry {
     /// Returns the number of loaded agents.
     pub fn agent_count(&self) -> usize {
         self.agents.len()
+    }
+
+    /// Get the full ACL for an agent by name.
+    ///
+    /// ACL rules are static and architecture-defined. Unknown agents receive
+    /// conservative defaults (can invoke only `bmad/developer`).
+    pub fn get_acl(&self, agent_name: &str) -> AgentAcl {
+        let can_respond_to = vec!["bmad/pm".to_string(), "bmad/sm".to_string()];
+
+        let can_invoke = match agent_name {
+            "bmad/architect" => vec![
+                "bmad/analyst".to_string(),
+                "bmad/developer".to_string(),
+                "bmad/ux-designer".to_string(),
+            ],
+            "bmad/qa" => vec!["bmad/developer".to_string()],
+            "bmad/quick-flow-solo-dev" => vec![],
+            _ => vec!["bmad/developer".to_string()],
+        };
+
+        AgentAcl {
+            can_invoke,
+            can_respond_to,
+        }
+    }
+
+    /// Get the list of agents this agent can invoke.
+    pub fn get_can_invoke(&self, agent_name: &str) -> Vec<String> {
+        self.get_acl(agent_name).can_invoke
+    }
+
+    /// Get the list of agents this agent can respond to.
+    pub fn get_can_respond_to(&self, agent_name: &str) -> Vec<String> {
+        self.get_acl(agent_name).can_respond_to
     }
 }
 
@@ -349,5 +392,154 @@ mod tests {
         );
         assert!(result.is_some());
         assert_eq!(result.unwrap().name, "bmad/dev");
+    }
+
+    // ── ACL tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn acl_architect_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/architect"),
+            vec![
+                "bmad/analyst".to_string(),
+                "bmad/developer".to_string(),
+                "bmad/ux-designer".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn acl_architect_can_respond_to() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_respond_to("bmad/architect"),
+            vec!["bmad/pm".to_string(), "bmad/sm".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_qa_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/qa"),
+            vec!["bmad/developer".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_quick_flow_solo_dev_can_invoke_empty() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        let can_invoke = registry.get_can_invoke("bmad/quick-flow-solo-dev");
+        assert!(
+            can_invoke.is_empty(),
+            "quick-flow-solo-dev should have empty can_invoke"
+        );
+    }
+
+    #[test]
+    fn acl_developer_default_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/developer"),
+            vec!["bmad/developer".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_pm_default_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/pm"),
+            vec!["bmad/developer".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_sm_default_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/sm"),
+            vec!["bmad/developer".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_tech_writer_default_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/tech-writer"),
+            vec!["bmad/developer".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_ux_designer_default_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/ux-designer"),
+            vec!["bmad/developer".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_analyst_default_can_invoke() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        assert_eq!(
+            registry.get_can_invoke("bmad/analyst"),
+            vec!["bmad/developer".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_all_agents_can_respond_to_pm_and_sm() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        let expected = vec!["bmad/pm".to_string(), "bmad/sm".to_string()];
+        let all_agents = [
+            "bmad/architect",
+            "bmad/qa",
+            "bmad/quick-flow-solo-dev",
+            "bmad/developer",
+            "bmad/pm",
+            "bmad/sm",
+            "bmad/tech-writer",
+            "bmad/ux-designer",
+            "bmad/analyst",
+        ];
+        for agent in &all_agents {
+            assert_eq!(
+                registry.get_can_respond_to(agent),
+                expected,
+                "agent {agent} should have can_respond_to = [bmad/pm, bmad/sm]"
+            );
+        }
+    }
+
+    #[test]
+    fn acl_unknown_agent_defaults() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        let acl = registry.get_acl("bmad/nonexistent");
+        assert_eq!(acl.can_invoke, vec!["bmad/developer".to_string()]);
+        assert_eq!(
+            acl.can_respond_to,
+            vec!["bmad/pm".to_string(), "bmad/sm".to_string()]
+        );
+    }
+
+    #[test]
+    fn acl_get_acl_returns_complete_struct() {
+        let registry = BmadAgentRegistry::new(&test_manifest_path());
+        let acl = registry.get_acl("bmad/architect");
+        assert_eq!(
+            acl,
+            AgentAcl {
+                can_invoke: vec![
+                    "bmad/analyst".to_string(),
+                    "bmad/developer".to_string(),
+                    "bmad/ux-designer".to_string(),
+                ],
+                can_respond_to: vec!["bmad/pm".to_string(), "bmad/sm".to_string()],
+            }
+        );
     }
 }

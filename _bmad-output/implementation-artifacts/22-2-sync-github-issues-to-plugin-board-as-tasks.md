@@ -1,6 +1,6 @@
 # Story 22.2: Sync GitHub Issues to plugin-board as Tasks
 
-Status: review
+Status: done
 
 ## Story
 

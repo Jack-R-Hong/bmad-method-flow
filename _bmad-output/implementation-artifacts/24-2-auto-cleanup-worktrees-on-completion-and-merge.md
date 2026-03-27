@@ -1,6 +1,6 @@
 # Story 24.2: Auto-Cleanup Worktrees on Completion and Merge
 
-Status: review
+Status: done
 
 ## Story
 

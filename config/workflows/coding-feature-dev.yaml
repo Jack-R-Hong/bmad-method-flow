@@ -36,10 +36,26 @@ steps:
       context_from: [memory_context]
       timeout_seconds: 300
 
+  # Step 1b: Multi-agent architecture review session
+  - id: architecture_review
+    type: session
+    depends_on: [architect_design]
+    config:
+      participants:
+        - agent: bmad/architect
+          activation: every_turn
+        - agent: bmad/qa
+          activation: every_turn
+      convergence:
+        strategy: fixed_turns
+        max_turns: 4
+      system_prompt: "Review the proposed architecture for quality, scalability, and maintainability. Debate trade-offs and identify potential issues."
+      context_from: [architect_design]
+
   # Step 2: Create isolated worktree for development
   - id: create_worktree
     type: function
-    depends_on: [architect_design]
+    depends_on: [architecture_review]
     executor: plugin-git-worktree
     config:
       command: ["git", "worktree", "add", "-b", "feature/{{branch_name}}", "../worktree-{{branch_name}}"]
@@ -50,6 +66,8 @@ steps:
     depends_on: [create_worktree]
     executor: provider-claude-code
     config:
+      mesh_enabled: true
+      agent_name: bmad/developer
       model_tier: balanced
       working_dir: "{{working_dir}}"
       system_prompt: |
@@ -59,6 +77,10 @@ steps:
       max_tokens: 8192
       context_from: [architect_design]
       timeout_seconds: 600
+      tools:
+        - name: "run_tests"
+          description: "Run the project test suite"
+          parameters: { "type": "object", "properties": {} }
       retry:
         max_attempts: 3
         on_failure_of: run_tests
@@ -153,5 +175,5 @@ steps:
     executor: plugin-git-ops
     optional: true
     config:
-      command: ["plugin-git-pr", "create-pr", "{{pr_title}}", "{{pr_body}}\n\n{{issue_closing_ref}}"]
+      command: ["plugin-git-pr", "create-pr", "{{pr_title}}", "{{pr_body}}{{issue_closing_ref}}"]
       timeout_seconds: 30

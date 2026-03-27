@@ -28,6 +28,24 @@ struct StepYaml {
 }
 
 #[derive(Debug, Deserialize)]
+struct SessionParticipantYaml {
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    activation: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct ConvergenceYaml {
+    #[serde(default)]
+    strategy: Option<String>,
+    #[serde(default)]
+    max_turns: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct StepConfigYaml {
     #[serde(default)]
@@ -36,6 +54,10 @@ struct StepConfigYaml {
     timeout_seconds: Option<u64>,
     #[serde(default)]
     context_from: Option<Vec<String>>,
+    #[serde(default)]
+    participants: Option<Vec<SessionParticipantYaml>>,
+    #[serde(default)]
+    convergence: Option<ConvergenceYaml>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +191,70 @@ pub fn validate_workflow_file(path: &Path, plugins_dir: &Path) -> Result<Validat
                 }
             }
         }
+
+        // Session steps: validate participants and convergence
+        if step.step_type.as_deref() == Some("session") {
+            // Check participants
+            match &step.config.as_ref().and_then(|c| c.participants.as_ref()) {
+                Some(participants) if participants.len() >= 2 => {
+                    for (j, p) in participants.iter().enumerate() {
+                        match &p.agent {
+                            Some(name) if name.starts_with("bmad/") => {}
+                            Some(name) => issues.push(format!(
+                                "{}: participant[{}] agent '{}' must use bmad/ prefix",
+                                step_label, j, name
+                            )),
+                            None => issues.push(format!(
+                                "{}: participant[{}] missing 'agent' field",
+                                step_label, j
+                            )),
+                        }
+                    }
+                }
+                Some(participants) => issues.push(format!(
+                    "{}: session step requires at least 2 participants (found {})",
+                    step_label,
+                    participants.len()
+                )),
+                None => issues.push(format!(
+                    "{}: session step requires 'participants' in config",
+                    step_label
+                )),
+            }
+
+            // Check convergence
+            match &step.config.as_ref().and_then(|c| c.convergence.as_ref()) {
+                Some(conv) => {
+                    // Check strategy
+                    const VALID_STRATEGIES: &[&str] = &["fixed_turns", "unanimous", "stagnation"];
+                    match &conv.strategy {
+                        Some(s) if VALID_STRATEGIES.contains(&s.as_str()) => {}
+                        Some(s) => issues.push(format!(
+                            "{}: convergence strategy '{}' must be one of: fixed_turns, unanimous, stagnation",
+                            step_label, s
+                        )),
+                        None => issues.push(format!(
+                            "{}: convergence requires 'strategy' field",
+                            step_label
+                        )),
+                    }
+                    // Check max_turns
+                    match conv.max_turns {
+                        Some(mt) if mt > 0 => {}
+                        Some(0) => issues.push(format!(
+                            "{}: convergence max_turns must be greater than 0",
+                            step_label
+                        )),
+                        None => {} // max_turns is optional, defaults handled at runtime
+                        _ => {}
+                    }
+                }
+                None => issues.push(format!(
+                    "{}: session step requires 'convergence' in config",
+                    step_label
+                )),
+            }
+        }
     }
 
     // Validate depends_on DAG: check references exist and detect cycles
@@ -223,6 +309,101 @@ pub fn validate_workflow_file(path: &Path, plugins_dir: &Path) -> Result<Validat
                     plugin_path.display()
                 ));
             }
+        }
+    }
+
+    Ok(ValidationResult {
+        file: path.display().to_string(),
+        valid: issues.is_empty(),
+        issues,
+    })
+}
+
+/// Validate that an agents.yaml file has required structure.
+///
+/// Each top-level key is an agent name. Each agent entry must have:
+/// - `description` (non-empty string)
+/// - `can_invoke` (list of agent names that must exist as top-level keys)
+/// - `can_respond_to` (list of agent names that must exist as top-level keys)
+pub fn validate_agents_yaml(path: &Path) -> Result<ValidationResult, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+
+    let mut issues = Vec::new();
+
+    let agents: HashMap<String, serde_yaml::Value> = match serde_yaml::from_str(&content) {
+        Ok(a) => a,
+        Err(e) => {
+            issues.push(format!("invalid YAML: {}", e));
+            return Ok(ValidationResult {
+                file: path.display().to_string(),
+                valid: false,
+                issues,
+            });
+        }
+    };
+
+    let agent_names: HashSet<&String> = agents.keys().collect();
+
+    for (name, value) in &agents {
+        let mapping = match value.as_mapping() {
+            Some(m) => m,
+            None => {
+                issues.push(format!("agent '{}': entry must be a mapping", name));
+                continue;
+            }
+        };
+
+        // Check description
+        let desc_key = serde_yaml::Value::String("description".to_string());
+        match mapping.get(&desc_key) {
+            Some(v) => {
+                let desc_str = v.as_str().unwrap_or("");
+                if desc_str.is_empty() {
+                    issues.push(format!("agent '{}': 'description' must not be empty", name));
+                }
+            }
+            None => issues.push(format!("agent '{}': missing 'description' field", name)),
+        }
+
+        // Check can_invoke references
+        let invoke_key = serde_yaml::Value::String("can_invoke".to_string());
+        match mapping.get(&invoke_key) {
+            Some(v) => {
+                if let Some(list) = v.as_sequence() {
+                    for item in list {
+                        if let Some(ref_name) = item.as_str() {
+                            if !agent_names.contains(&ref_name.to_string()) {
+                                issues.push(format!(
+                                    "agent '{}': can_invoke references unknown agent '{}'",
+                                    name, ref_name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            None => issues.push(format!("agent '{}': missing 'can_invoke' field", name)),
+        }
+
+        // Check can_respond_to references
+        let respond_key = serde_yaml::Value::String("can_respond_to".to_string());
+        match mapping.get(&respond_key) {
+            Some(v) => {
+                if let Some(list) = v.as_sequence() {
+                    for item in list {
+                        if let Some(ref_name) = item.as_str() {
+                            if !agent_names.contains(&ref_name.to_string()) {
+                                issues.push(format!(
+                                    "agent '{}': can_respond_to references unknown agent '{}'",
+                                    name, ref_name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            None => issues.push(format!("agent '{}': missing 'can_respond_to' field", name)),
         }
     }
 
@@ -426,5 +607,256 @@ mod tests {
 
         let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
         assert!(result.valid, "issues: {:?}", result.issues);
+    }
+
+    // --- Session step validation tests ---
+
+    #[test]
+    fn session_step_with_valid_config_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"name: test
+version: 1
+steps:
+  - id: s1
+    type: session
+    config:
+      participants:
+        - agent: bmad/analyst
+          activation: always
+        - agent: bmad/architect
+          activation: always
+      convergence:
+        strategy: fixed_turns
+        max_turns: 3"#
+        )
+        .unwrap();
+
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
+        assert!(result.valid, "issues: {:?}", result.issues);
+    }
+
+    #[test]
+    fn session_step_with_one_participant_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"name: test
+version: 1
+steps:
+  - id: s1
+    type: session
+    config:
+      participants:
+        - agent: bmad/analyst
+      convergence:
+        strategy: fixed_turns"#
+        )
+        .unwrap();
+
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.contains("at least 2 participants")));
+    }
+
+    #[test]
+    fn session_step_with_invalid_agent_name_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"name: test
+version: 1
+steps:
+  - id: s1
+    type: session
+    config:
+      participants:
+        - agent: bmad/analyst
+        - agent: rogue-agent
+      convergence:
+        strategy: fixed_turns"#
+        )
+        .unwrap();
+
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.contains("rogue-agent") && i.contains("bmad/ prefix")));
+    }
+
+    #[test]
+    fn session_step_with_invalid_convergence_strategy_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"name: test
+version: 1
+steps:
+  - id: s1
+    type: session
+    config:
+      participants:
+        - agent: bmad/analyst
+        - agent: bmad/architect
+      convergence:
+        strategy: round_robin"#
+        )
+        .unwrap();
+
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.contains("round_robin") && i.contains("must be one of")));
+    }
+
+    #[test]
+    fn session_step_with_zero_max_turns_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"name: test
+version: 1
+steps:
+  - id: s1
+    type: session
+    config:
+      participants:
+        - agent: bmad/analyst
+        - agent: bmad/architect
+      convergence:
+        strategy: unanimous
+        max_turns: 0"#
+        )
+        .unwrap();
+
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.contains("max_turns") && i.contains("greater than 0")));
+    }
+
+    #[test]
+    fn session_step_missing_convergence_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"name: test
+version: 1
+steps:
+  - id: s1
+    type: session
+    config:
+      participants:
+        - agent: bmad/analyst
+        - agent: bmad/architect"#
+        )
+        .unwrap();
+
+        let result = validate_workflow_file(&path, Path::new("config/plugins")).unwrap();
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|i| i.contains("convergence")));
+    }
+
+    // --- agents.yaml validation tests ---
+
+    #[test]
+    fn valid_agents_yaml_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agents.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"bmad/analyst:
+  description: Analyzes requirements
+  can_invoke:
+    - bmad/architect
+  can_respond_to:
+    - bmad/architect
+bmad/architect:
+  description: Designs architecture
+  can_invoke:
+    - bmad/analyst
+  can_respond_to:
+    - bmad/analyst"#
+        )
+        .unwrap();
+
+        let result = validate_agents_yaml(&path).unwrap();
+        assert!(result.valid, "issues: {:?}", result.issues);
+    }
+
+    #[test]
+    fn agents_yaml_missing_description_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agents.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"bmad/analyst:
+  can_invoke: []
+  can_respond_to: []"#
+        )
+        .unwrap();
+
+        let result = validate_agents_yaml(&path).unwrap();
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|i| i.contains("description")));
+    }
+
+    #[test]
+    fn agents_yaml_invalid_can_invoke_reference_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agents.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"bmad/analyst:
+  description: Analyzes things
+  can_invoke:
+    - bmad/nonexistent
+  can_respond_to: []"#
+        )
+        .unwrap();
+
+        let result = validate_agents_yaml(&path).unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.contains("can_invoke") && i.contains("bmad/nonexistent")));
+    }
+
+    #[test]
+    fn agents_yaml_parse_error_reports_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agents.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "  bad indent: [").unwrap();
+
+        let result = validate_agents_yaml(&path).unwrap();
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|i| i.contains("invalid YAML")));
     }
 }

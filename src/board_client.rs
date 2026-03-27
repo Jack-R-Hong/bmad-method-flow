@@ -6,10 +6,40 @@
 
 use pulse_plugin_sdk::error::WitPluginError;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 fn api_err(msg: impl std::fmt::Display) -> WitPluginError {
     WitPluginError::internal(format!("Board API error: {msg}"))
+}
+
+/// Minimal URL-encode for query parameter values.
+fn url_encode_param(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('&', "%26")
+        .replace('=', "%3D")
+        .replace('#', "%23")
+        .replace('?', "%3F")
+        .replace('+', "%2B")
+}
+
+/// Validate that a task_id is safe to interpolate into a URL path.
+/// Rejects path-traversal sequences and other unsafe characters.
+fn validate_task_id(task_id: &str) -> Result<(), WitPluginError> {
+    if task_id.is_empty() {
+        return Err(api_err("task_id must not be empty"));
+    }
+    if task_id.contains('/')
+        || task_id.contains('\\')
+        || task_id.contains("..")
+        || task_id.contains('\0')
+    {
+        return Err(api_err(format!(
+            "task_id contains unsafe characters: {task_id:?}"
+        )));
+    }
+    Ok(())
 }
 
 // ── Capability constants ─────────────────────────────────────────────────
@@ -23,10 +53,22 @@ fn pulse_api_port() -> String {
 }
 
 /// Discover plugin-board via the Pulse plugin registry (HTTP fallback for CLI mode).
-/// Caches the result for the process lifetime. Validates version >=0.1.0.
-fn discover_board_http() -> Result<&'static str, WitPluginError> {
-    static DISCOVERY: OnceLock<Result<String, String>> = OnceLock::new();
-    let result = DISCOVERY.get_or_init(|| {
+/// Caches successful discovery for the process lifetime; failures are retried.
+fn discover_board_http() -> Result<String, WitPluginError> {
+    static DISCOVERY: Mutex<Option<String>> = Mutex::new(None);
+
+    // Fast path: return cached successful result.
+    {
+        let guard = DISCOVERY
+            .lock()
+            .map_err(|e| api_err(format!("lock: {e}")))?;
+        if let Some(ref name) = *guard {
+            return Ok(name.clone());
+        }
+    }
+
+    // Slow path: perform discovery.
+    let discovered = (|| -> Result<String, String> {
         let port = pulse_api_port();
         let url = format!("http://127.0.0.1:{port}/api/v1/plugins");
         let body = reqwest::blocking::get(&url)
@@ -54,10 +96,17 @@ fn discover_board_http() -> Result<&'static str, WitPluginError> {
             }
         }
         Err("plugin-board not found in plugin registry".to_string())
-    });
+    })();
 
-    match result {
-        Ok(name) => Ok(name.as_str()),
+    match discovered {
+        Ok(name) => {
+            // Cache the successful result.
+            let mut guard = DISCOVERY
+                .lock()
+                .map_err(|e| api_err(format!("lock: {e}")))?;
+            *guard = Some(name.clone());
+            Ok(name)
+        }
         Err(msg) => Err(api_err(msg)),
     }
 }
@@ -110,7 +159,7 @@ fn board_query(
     // 2. HTTP fallback (CLI mode) — discover plugin-board dynamically
     let mut url = board_api_http(endpoint)?;
     if let Some(ws) = workspace {
-        url.push_str(&format!("?workspace={ws}"));
+        url.push_str(&format!("?workspace={}", url_encode_param(ws)));
     }
     let body = reqwest::blocking::get(&url)
         .map_err(|e| api_err(format!("GET {url}: {e}")))?
@@ -179,23 +228,27 @@ pub fn list_assignments_in_workspace(
 }
 
 /// Update an assignment's fields (merge semantics) via Pulse task API.
-pub fn update_assignment(
-    task_id: &str,
-    payload: &serde_json::Value,
-) -> Result<(), WitPluginError> {
+pub fn update_assignment(task_id: &str, payload: &serde_json::Value) -> Result<(), WitPluginError> {
+    validate_task_id(task_id)?;
     let port = pulse_api_port();
     let url = format!("http://127.0.0.1:{port}/api/v1/tasks/{task_id}/metadata");
     let client = reqwest::blocking::Client::new();
-    client
+    let resp = client
         .patch(&url)
         .json(payload)
         .send()
         .map_err(|e| api_err(format!("PATCH {url}: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().unwrap_or_default();
+        return Err(api_err(format!("PATCH {url}: HTTP {status} - {body}")));
+    }
     Ok(())
 }
 
 /// Add a comment to an assignment via Pulse task API.
 pub fn add_comment(task_id: &str, content: &str, author: &str) -> Result<(), WitPluginError> {
+    validate_task_id(task_id)?;
     let port = pulse_api_port();
     let url = format!("http://127.0.0.1:{port}/api/v1/tasks/{task_id}/metadata");
 
@@ -230,11 +283,16 @@ pub fn add_comment(task_id: &str, content: &str, author: &str) -> Result<(), Wit
     meta["comments"] = serde_json::Value::Array(new_comments);
 
     let client = reqwest::blocking::Client::new();
-    client
+    let resp = client
         .patch(&url)
         .json(&meta)
         .send()
         .map_err(|e| api_err(format!("PATCH {url}: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().unwrap_or_default();
+        return Err(api_err(format!("PATCH {url}: HTTP {status} - {body}")));
+    }
     Ok(())
 }
 
@@ -271,7 +329,12 @@ pub fn create_task(
         .send()
         .map_err(|e| api_err(format!("POST {url}: {e}")))?;
 
+    let status = resp.status();
     let body = resp.text().map_err(api_err)?;
+    if !status.is_success() {
+        return Err(api_err(format!("POST {url}: HTTP {status} - {body}")));
+    }
+
     let val: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| api_err(format!("parse create response: {e}")))?;
 
@@ -321,10 +384,7 @@ pub fn find_task_by_issue_number(
         if let Some(meta) = task_obj.get("metadata") {
             if let Some(num) = meta.get("issue_number").and_then(|n| n.as_u64()) {
                 if num == issue_number {
-                    return Ok(Some((
-                        assignment.id.clone(),
-                        assignment.status.clone(),
-                    )));
+                    return Ok(Some((assignment.id.clone(), assignment.status.clone())));
                 }
             }
         }
@@ -333,10 +393,50 @@ pub fn find_task_by_issue_number(
     Ok(None)
 }
 
+/// Pre-load a map of issue_number -> (task_id, status) for all tasks that have issue metadata.
+/// This avoids O(N) HTTP calls per find_task_by_issue_number lookup during sync.
+pub fn build_issue_task_index(
+    workspace: Option<&str>,
+) -> Result<std::collections::HashMap<u64, (String, String)>, WitPluginError> {
+    let assignments = list_assignments_in_workspace(None, workspace)?;
+    let port = pulse_api_port();
+    let mut index = std::collections::HashMap::new();
+
+    for assignment in &assignments {
+        let task_url = format!("http://127.0.0.1:{port}/api/v1/tasks/{}", assignment.id);
+        let body = match reqwest::blocking::get(&task_url) {
+            Ok(resp) => match resp.text() {
+                Ok(b) => b,
+                Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
+        let val: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let meta = val
+            .get("task")
+            .unwrap_or(&val)
+            .get("metadata")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        if let Some(issue_num) = meta.get("issue_number").and_then(|v| v.as_u64()) {
+            index.insert(
+                issue_num,
+                (assignment.id.clone(), assignment.status.clone()),
+            );
+        }
+    }
+
+    Ok(index)
+}
+
 /// Get task metadata from the Pulse task API.
 ///
 /// Returns the metadata JSON object, or an empty object if no metadata.
 pub fn get_task_metadata(task_id: &str) -> Result<serde_json::Value, WitPluginError> {
+    validate_task_id(task_id)?;
     let port = pulse_api_port();
     let task_url = format!("http://127.0.0.1:{port}/api/v1/tasks/{task_id}");
     let body = reqwest::blocking::get(&task_url)
@@ -408,4 +508,30 @@ mod tests {
         assert_eq!(a.status, "");
     }
 
+    #[test]
+    fn url_encode_param_encodes_special_chars() {
+        assert_eq!(url_encode_param("hello world"), "hello%20world");
+        assert_eq!(url_encode_param("a&b=c"), "a%26b%3Dc");
+        assert_eq!(url_encode_param("foo#bar"), "foo%23bar");
+        assert_eq!(url_encode_param("x?y+z"), "x%3Fy%2Bz");
+        assert_eq!(url_encode_param("100%done"), "100%25done");
+        assert_eq!(url_encode_param("simple"), "simple");
+    }
+
+    #[test]
+    fn validate_task_id_accepts_valid() {
+        assert!(validate_task_id("task-123").is_ok());
+        assert!(validate_task_id("abc").is_ok());
+        assert!(validate_task_id("task_456-def").is_ok());
+    }
+
+    #[test]
+    fn validate_task_id_rejects_traversal() {
+        assert!(validate_task_id("").is_err());
+        assert!(validate_task_id("../etc/passwd").is_err());
+        assert!(validate_task_id("foo/bar").is_err());
+        assert!(validate_task_id("foo\\bar").is_err());
+        assert!(validate_task_id("a..b").is_err());
+        assert!(validate_task_id("foo\0bar").is_err());
+    }
 }

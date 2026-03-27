@@ -95,12 +95,17 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
                     .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
             )
         }
+        #[cfg(not(target_arch = "wasm32"))]
         "sync-github-issues" => {
             let result = crate::github_sync::sync_issues_to_board(&config)?;
             to_json_string(
                 serde_json::to_value(&result)
                     .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
             )
+        }
+        #[cfg(target_arch = "wasm32")]
+        "sync-github-issues" => {
+            Err(WitPluginError::internal("sync-github-issues not available in WASM"))
         }
         #[cfg(not(target_arch = "wasm32"))]
         "cleanup-worktrees" => {
@@ -135,6 +140,14 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
             Err(WitPluginError::internal("recover-worktrees not available in WASM"))
         }
         #[cfg(not(target_arch = "wasm32"))]
+        "generate-agents-yaml" => {
+            to_json_string(generate_agents_yaml(&config))
+        }
+        #[cfg(target_arch = "wasm32")]
+        "generate-agents-yaml" => {
+            Err(WitPluginError::internal("generate-agents-yaml is not available in WASM builds"))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         "check-pr-reviews" => {
             let result = check_pr_reviews_value(&config)?;
             to_json_string(Ok(result))
@@ -167,7 +180,7 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
             Err(WitPluginError::internal("build-fix-context not available in WASM"))
         }
         other => Err(WitPluginError::not_found(format!(
-            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query, data-mutate, auto-dev-status, auto-dev-next, auto-dev-watch, sync-github-issues, cleanup-worktrees, worktree-status, recover-worktrees, check-pr-reviews, build-fix-context",
+            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query, data-mutate, auto-dev-status, auto-dev-next, auto-dev-watch, sync-github-issues, cleanup-worktrees, worktree-status, recover-worktrees, check-pr-reviews, build-fix-context, generate-agents-yaml",
             other
         ))),
     }
@@ -175,9 +188,7 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
 
 /// Check all open auto-dev PRs for review status.
 #[cfg(not(target_arch = "wasm32"))]
-fn check_pr_reviews_value(
-    _config: &WorkspaceConfig,
-) -> Result<serde_json::Value, WitPluginError> {
+fn check_pr_reviews_value(_config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
     let client = crate::github_client::GitHubClient::new()?;
     let prs = client.list_open_prs()?;
 
@@ -200,6 +211,103 @@ fn check_pr_reviews_value(
     }
 
     Ok(serde_json::Value::Array(results))
+}
+
+/// Generate agents.yaml ACL configuration from the BMAD agent registry.
+#[cfg(not(target_arch = "wasm32"))]
+fn generate_agents_yaml(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    use std::collections::BTreeMap;
+
+    let manifest_path = config.base_dir.join("_bmad/_config/agent-manifest.csv");
+    let registry = crate::agent_registry::BmadAgentRegistry::new(&manifest_path);
+
+    let agents = {
+        use pulse_plugin_sdk::traits::agent_definition::AgentDefinitionProvider;
+        registry.list_agents(None)
+    };
+
+    let mut agents_map: BTreeMap<String, BTreeMap<String, serde_yaml::Value>> = BTreeMap::new();
+
+    for agent in &agents {
+        let acl = registry.get_acl(&agent.name);
+        let mut entry: BTreeMap<String, serde_yaml::Value> = BTreeMap::new();
+
+        entry.insert(
+            "allowed_tools".to_string(),
+            serde_yaml::to_value(agent.tools.as_ref().cloned().unwrap_or_default())
+                .map_err(|e| WitPluginError::internal(format!("YAML error: {e}")))?,
+        );
+        entry.insert(
+            "can_invoke".to_string(),
+            serde_yaml::to_value(&acl.can_invoke)
+                .map_err(|e| WitPluginError::internal(format!("YAML error: {e}")))?,
+        );
+        entry.insert(
+            "can_respond_to".to_string(),
+            serde_yaml::to_value(&acl.can_respond_to)
+                .map_err(|e| WitPluginError::internal(format!("YAML error: {e}")))?,
+        );
+        entry.insert(
+            "description".to_string(),
+            serde_yaml::Value::String(agent.description.clone().unwrap_or_default()),
+        );
+        entry.insert(
+            "max_budget_usd".to_string(),
+            serde_yaml::to_value(5.0_f64)
+                .map_err(|e| WitPluginError::internal(format!("YAML error: {e}")))?,
+        );
+        entry.insert(
+            "max_turns".to_string(),
+            serde_yaml::to_value(25_u32)
+                .map_err(|e| WitPluginError::internal(format!("YAML error: {e}")))?,
+        );
+        entry.insert(
+            "model".to_string(),
+            serde_yaml::Value::String("claude-sonnet-4-20250514".to_string()),
+        );
+        entry.insert(
+            "timeout_secs".to_string(),
+            serde_yaml::to_value(300_u32)
+                .map_err(|e| WitPluginError::internal(format!("YAML error: {e}")))?,
+        );
+
+        agents_map.insert(agent.name.clone(), entry);
+    }
+
+    let yaml_body = serde_yaml::to_string(&agents_map)
+        .map_err(|e| WitPluginError::internal(format!("YAML serialization error: {e}")))?;
+    let output = format!(
+        "# Generated by plugin-coding-pack. Do not edit manually.\n\n{}",
+        yaml_body
+    );
+
+    if let Some(p) = config.agent_mesh.agents_yaml_path.as_deref() {
+        if p.contains("..") || std::path::Path::new(p).is_absolute() {
+            return Err(WitPluginError::invalid_input(
+                "agents_yaml_path must be a relative path without '..' segments",
+            ));
+        }
+    }
+
+    let output_path = config
+        .agent_mesh
+        .agents_yaml_path
+        .as_deref()
+        .map(|p| config.base_dir.join(p))
+        .unwrap_or_else(|| config.base_dir.join("config/agents.yaml"));
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| WitPluginError::internal(format!("cannot create directory: {e}")))?;
+    }
+    std::fs::write(&output_path, &output)
+        .map_err(|e| WitPluginError::internal(format!("cannot write agents.yaml: {e}")))?;
+
+    Ok(serde_json::json!({
+        "status": "generated",
+        "path": output_path.display().to_string(),
+        "agent_count": agents_map.len(),
+    }))
 }
 
 fn to_json_string(
@@ -376,13 +484,18 @@ fn pack_status_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitP
 /// Handle data-query requests from dashboard proxy.
 /// Routes endpoint paths to internal data functions.
 /// `workspace` is the Pulse workspace name (not a path) for task filtering.
-fn execute_data_query(endpoint: &str, config: &WorkspaceConfig, workspace: Option<&str>, _board_id: Option<&str>) -> Result<String, WitPluginError> {
+fn execute_data_query(
+    endpoint: &str,
+    config: &WorkspaceConfig,
+    workspace: Option<&str>,
+    _board_id: Option<&str>,
+) -> Result<String, WitPluginError> {
     let _ = workspace;
     let endpoint = endpoint.trim_start_matches('/');
     let result = match endpoint {
         "status" => pack_status_value(config)?,
         "workflows/list" => list_workflows_detail_value(config)?,
-        "agents/list" => list_agents_value()?,
+        "agents/list" => list_agents_value(config)?,
         ep if ep.starts_with("workflows/") => {
             let id = ep.strip_prefix("workflows/").unwrap_or("");
             get_workflow_detail_value(id, config)?
@@ -451,19 +564,51 @@ fn list_workflows_detail_value(
 }
 
 /// BMAD agent list for dashboard table view.
-fn list_agents_value() -> Result<serde_json::Value, WitPluginError> {
-    let agents = serde_json::json!([
-        {"id": "bmad/architect", "name": "Winston", "role": "Architect", "assigned_workflows": "coding-feature-dev, coding-story-dev"},
-        {"id": "bmad/dev", "name": "Amelia", "role": "Developer", "assigned_workflows": "coding-feature-dev, coding-story-dev, coding-bug-fix"},
-        {"id": "bmad/pm", "name": "John", "role": "Product Manager", "assigned_workflows": "coding-feature-dev"},
-        {"id": "bmad/qa", "name": "Quinn", "role": "QA Engineer", "assigned_workflows": "coding-feature-dev, coding-story-dev, coding-review"},
-        {"id": "bmad/sm", "name": "Bob", "role": "Scrum Master", "assigned_workflows": "coding-story-dev"},
-        {"id": "bmad/quick-flow", "name": "Barry", "role": "Quick Flow Solo Dev", "assigned_workflows": "coding-quick-dev"},
-        {"id": "bmad/analyst", "name": "Mary", "role": "Analyst", "assigned_workflows": ""},
-        {"id": "bmad/ux-designer", "name": "Sally", "role": "UX Designer", "assigned_workflows": ""},
-        {"id": "bmad/tech-writer", "name": "Paige", "role": "Tech Writer", "assigned_workflows": ""},
-    ]);
-    Ok(agents)
+/// Uses the live BmadAgentRegistry for consistent, authoritative agent data.
+#[cfg(not(target_arch = "wasm32"))]
+fn list_agents_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    let manifest_path = config.base_dir.join("_bmad/_config/agent-manifest.csv");
+    let registry = crate::agent_registry::BmadAgentRegistry::new(&manifest_path);
+
+    let agents = {
+        use pulse_plugin_sdk::traits::agent_definition::AgentDefinitionProvider;
+        registry.list_agents(None)
+    };
+
+    if agents.is_empty() {
+        return Ok(serde_json::json!([]));
+    }
+
+    let result: Vec<serde_json::Value> = agents
+        .iter()
+        .map(|a| {
+            // Extract display name and role from description format "DisplayName \u{2014} Role Title"
+            let (display_name, role) = a
+                .description
+                .as_deref()
+                .and_then(|d| d.split_once(" \u{2014} "))
+                .map(|(name, role)| (name.to_string(), role.to_string()))
+                .unwrap_or_else(|| (a.name.clone(), String::new()));
+
+            serde_json::json!({
+                "id": a.name,
+                "name": display_name,
+                "role": role,
+                "description": a.description.as_deref().unwrap_or(""),
+                "model_tier": a.model_tier.as_deref().unwrap_or("balanced"),
+                "skills": a.skills.as_ref().cloned().unwrap_or_default(),
+                "tools": a.tools.as_ref().cloned().unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!(result))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn list_agents_value(_config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    // Fallback for WASM builds -- registry not available
+    Ok(serde_json::json!([]))
 }
 
 /// Single workflow detail for dashboard detail view.
@@ -684,6 +829,359 @@ mod tests {
         assert_eq!(
             err.code, "invalid_input",
             "build-fix-context should be recognized and require pr_number"
+        );
+    }
+
+    // ── Story 25-5: generate-agents-yaml ──────────────────────────────
+
+    fn make_test_workspace_config() -> WorkspaceConfig {
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        WorkspaceConfig::from_base_dir(&base)
+    }
+
+    #[test]
+    fn generate_agents_yaml_action_recognized() {
+        // Point workspace at the project root so it can find the manifest
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let tmp = tempfile::tempdir().unwrap();
+        // Copy manifest into temp workspace structure
+        let bmad_config = tmp.path().join("_bmad/_config");
+        std::fs::create_dir_all(&bmad_config).unwrap();
+        std::fs::copy(
+            base.join("_bmad/_config/agent-manifest.csv"),
+            bmad_config.join("agent-manifest.csv"),
+        )
+        .unwrap();
+        let input = test_input_with_workspace("generate-agents-yaml", tmp.path().to_str().unwrap());
+        let result = execute_action(&input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["status"], "generated");
+        assert_eq!(parsed["agent_count"], 9);
+    }
+
+    #[test]
+    fn generate_agents_yaml_produces_valid_yaml_with_all_agents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let bmad_config = tmp.path().join("_bmad/_config");
+        std::fs::create_dir_all(&bmad_config).unwrap();
+        std::fs::copy(
+            base.join("_bmad/_config/agent-manifest.csv"),
+            bmad_config.join("agent-manifest.csv"),
+        )
+        .unwrap();
+
+        let config = WorkspaceConfig::from_base_dir(tmp.path());
+        let result = generate_agents_yaml(&config).unwrap();
+        assert_eq!(result["agent_count"], 9);
+
+        // Read back and parse the YAML
+        let yaml_path = tmp.path().join("config/agents.yaml");
+        assert!(yaml_path.exists(), "agents.yaml should be written");
+        let content = std::fs::read_to_string(&yaml_path).unwrap();
+
+        // Verify header comment
+        assert!(
+            content.starts_with("# Generated by plugin-coding-pack. Do not edit manually."),
+            "Should have header comment"
+        );
+
+        // Parse YAML body (skip comment lines)
+        let parsed: std::collections::BTreeMap<String, serde_yaml::Value> =
+            serde_yaml::from_str(&content).unwrap();
+        assert_eq!(parsed.len(), 9, "should have 9 agents");
+    }
+
+    #[test]
+    fn generate_agents_yaml_alphabetical_ordering() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let bmad_config = tmp.path().join("_bmad/_config");
+        std::fs::create_dir_all(&bmad_config).unwrap();
+        std::fs::copy(
+            base.join("_bmad/_config/agent-manifest.csv"),
+            bmad_config.join("agent-manifest.csv"),
+        )
+        .unwrap();
+
+        let config = WorkspaceConfig::from_base_dir(tmp.path());
+        generate_agents_yaml(&config).unwrap();
+
+        let yaml_path = tmp.path().join("config/agents.yaml");
+        let content = std::fs::read_to_string(&yaml_path).unwrap();
+        let parsed: std::collections::BTreeMap<String, serde_yaml::Value> =
+            serde_yaml::from_str(&content).unwrap();
+
+        let keys: Vec<&String> = parsed.keys().collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted, "agent keys should be alphabetically sorted");
+    }
+
+    #[test]
+    fn generate_agents_yaml_each_agent_has_required_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let bmad_config = tmp.path().join("_bmad/_config");
+        std::fs::create_dir_all(&bmad_config).unwrap();
+        std::fs::copy(
+            base.join("_bmad/_config/agent-manifest.csv"),
+            bmad_config.join("agent-manifest.csv"),
+        )
+        .unwrap();
+
+        let config = WorkspaceConfig::from_base_dir(tmp.path());
+        generate_agents_yaml(&config).unwrap();
+
+        let yaml_path = tmp.path().join("config/agents.yaml");
+        let content = std::fs::read_to_string(&yaml_path).unwrap();
+        let parsed: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, serde_yaml::Value>,
+        > = serde_yaml::from_str(&content).unwrap();
+
+        let required_fields = [
+            "description",
+            "model",
+            "max_turns",
+            "max_budget_usd",
+            "timeout_secs",
+            "can_invoke",
+            "can_respond_to",
+            "allowed_tools",
+        ];
+
+        for (name, entry) in &parsed {
+            for field in &required_fields {
+                assert!(
+                    entry.contains_key(*field),
+                    "agent '{name}' should have field '{field}'"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generate_agents_yaml_acl_rules_match_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let bmad_config = tmp.path().join("_bmad/_config");
+        std::fs::create_dir_all(&bmad_config).unwrap();
+        std::fs::copy(
+            base.join("_bmad/_config/agent-manifest.csv"),
+            bmad_config.join("agent-manifest.csv"),
+        )
+        .unwrap();
+
+        let config = WorkspaceConfig::from_base_dir(tmp.path());
+        generate_agents_yaml(&config).unwrap();
+
+        let yaml_path = tmp.path().join("config/agents.yaml");
+        let content = std::fs::read_to_string(&yaml_path).unwrap();
+        let parsed: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, serde_yaml::Value>,
+        > = serde_yaml::from_str(&content).unwrap();
+
+        // Architect should have specific can_invoke
+        let architect = &parsed["bmad/architect"];
+        let can_invoke: Vec<String> =
+            serde_yaml::from_value(architect["can_invoke"].clone()).unwrap();
+        assert_eq!(
+            can_invoke,
+            vec!["bmad/analyst", "bmad/developer", "bmad/ux-designer"]
+        );
+
+        // QA should have can_invoke = [bmad/developer]
+        let qa = &parsed["bmad/qa"];
+        let can_invoke: Vec<String> = serde_yaml::from_value(qa["can_invoke"].clone()).unwrap();
+        assert_eq!(can_invoke, vec!["bmad/developer"]);
+
+        // All agents should have can_respond_to = [bmad/pm, bmad/sm]
+        for (name, entry) in &parsed {
+            let respond_to: Vec<String> =
+                serde_yaml::from_value(entry["can_respond_to"].clone()).unwrap();
+            assert_eq!(
+                respond_to,
+                vec!["bmad/pm", "bmad/sm"],
+                "agent {name} should respond to pm and sm"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_agents_yaml_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let bmad_config = tmp.path().join("_bmad/_config");
+        std::fs::create_dir_all(&bmad_config).unwrap();
+        std::fs::copy(
+            base.join("_bmad/_config/agent-manifest.csv"),
+            bmad_config.join("agent-manifest.csv"),
+        )
+        .unwrap();
+
+        let config = WorkspaceConfig::from_base_dir(tmp.path());
+        generate_agents_yaml(&config).unwrap();
+        let yaml_path = tmp.path().join("config/agents.yaml");
+        let first = std::fs::read_to_string(&yaml_path).unwrap();
+
+        generate_agents_yaml(&config).unwrap();
+        let second = std::fs::read_to_string(&yaml_path).unwrap();
+
+        assert_eq!(
+            first, second,
+            "running twice should produce identical output"
+        );
+    }
+
+    #[test]
+    fn generate_agents_yaml_custom_output_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let bmad_config = tmp.path().join("_bmad/_config");
+        std::fs::create_dir_all(&bmad_config).unwrap();
+        std::fs::copy(
+            base.join("_bmad/_config/agent-manifest.csv"),
+            bmad_config.join("agent-manifest.csv"),
+        )
+        .unwrap();
+
+        let mut config = WorkspaceConfig::from_base_dir(tmp.path());
+        config.agent_mesh.agents_yaml_path = Some("custom/my-agents.yaml".to_string());
+        let result = generate_agents_yaml(&config).unwrap();
+        let path = result["path"].as_str().unwrap();
+        assert!(
+            path.contains("custom/my-agents.yaml"),
+            "should use custom path, got: {path}"
+        );
+        assert!(
+            tmp.path().join("custom/my-agents.yaml").exists(),
+            "custom path file should exist"
+        );
+    }
+
+    // ── Story 25-6: list-agents refactored to use registry ────────────
+
+    #[test]
+    fn list_agents_returns_9_agents_from_registry() {
+        let config = make_test_workspace_config();
+        let result = list_agents_value(&config).unwrap();
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 9, "should have 9 agents from registry");
+    }
+
+    #[test]
+    fn list_agents_uses_registry_names() {
+        let config = make_test_workspace_config();
+        let result = list_agents_value(&config).unwrap();
+        let arr = result.as_array().unwrap();
+        let ids: Vec<&str> = arr.iter().filter_map(|a| a["id"].as_str()).collect();
+
+        // Registry names from CSV (authoritative source of truth)
+        assert!(
+            ids.contains(&"bmad/dev"),
+            "should have bmad/dev from registry"
+        );
+        assert!(
+            ids.contains(&"bmad/quick-flow-solo-dev"),
+            "should have bmad/quick-flow-solo-dev from registry"
+        );
+        assert!(
+            ids.contains(&"bmad/architect"),
+            "should have bmad/architect"
+        );
+        assert!(ids.contains(&"bmad/analyst"), "should have bmad/analyst");
+        assert!(ids.contains(&"bmad/pm"), "should have bmad/pm");
+        assert!(ids.contains(&"bmad/qa"), "should have bmad/qa");
+        assert!(ids.contains(&"bmad/sm"), "should have bmad/sm");
+        assert!(
+            ids.contains(&"bmad/tech-writer"),
+            "should have bmad/tech-writer"
+        );
+        assert!(
+            ids.contains(&"bmad/ux-designer"),
+            "should have bmad/ux-designer"
+        );
+
+        // Old hardcoded incorrect names no longer present
+        assert!(
+            !ids.contains(&"bmad/quick-flow"),
+            "should NOT have old bmad/quick-flow"
+        );
+    }
+
+    #[test]
+    fn list_agents_alphabetically_sorted() {
+        let config = make_test_workspace_config();
+        let result = list_agents_value(&config).unwrap();
+        let arr = result.as_array().unwrap();
+        let ids: Vec<&str> = arr.iter().filter_map(|a| a["id"].as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted, "agents should be sorted alphabetically by id");
+    }
+
+    #[test]
+    fn list_agents_each_entry_has_required_fields() {
+        let config = make_test_workspace_config();
+        let result = list_agents_value(&config).unwrap();
+        let arr = result.as_array().unwrap();
+
+        for agent in arr {
+            let id = agent["id"].as_str().unwrap_or("unknown");
+            assert!(agent.get("id").is_some(), "agent should have 'id'");
+            assert!(agent.get("name").is_some(), "agent {id} should have 'name'");
+            assert!(agent.get("role").is_some(), "agent {id} should have 'role'");
+            assert!(
+                agent.get("description").is_some(),
+                "agent {id} should have 'description'"
+            );
+            assert!(
+                agent.get("model_tier").is_some(),
+                "agent {id} should have 'model_tier'"
+            );
+            assert!(
+                agent.get("skills").is_some(),
+                "agent {id} should have 'skills'"
+            );
+            assert!(
+                agent.get("tools").is_some(),
+                "agent {id} should have 'tools'"
+            );
+        }
+    }
+
+    #[test]
+    fn list_agents_display_name_and_role_parsed_from_description() {
+        let config = make_test_workspace_config();
+        let result = list_agents_value(&config).unwrap();
+        let arr = result.as_array().unwrap();
+
+        // Find architect
+        let architect = arr
+            .iter()
+            .find(|a| a["id"].as_str() == Some("bmad/architect"))
+            .expect("should find bmad/architect");
+        assert_eq!(architect["name"].as_str(), Some("Winston"));
+        assert!(
+            architect["role"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Architect"),
+            "architect role should contain 'Architect'"
+        );
+    }
+
+    #[test]
+    fn list_agents_graceful_degradation_missing_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = WorkspaceConfig::from_base_dir(tmp.path());
+        let result = list_agents_value(&config).unwrap();
+        let arr = result.as_array().unwrap();
+        assert!(
+            arr.is_empty(),
+            "should return empty array when manifest is missing"
         );
     }
 }

@@ -2,7 +2,7 @@
 
 **Epic:** 25 — Agent Mesh Safety Guards
 **Story ID:** 25.5
-**Status:** ready-for-dev
+**Status:** done
 
 ## Story
 
@@ -21,28 +21,28 @@ so that mesh configuration is derived from authoritative definitions and cannot 
 
 ## Tasks / Subtasks
 
-- [ ] Add `generate-agents-yaml` action to `execute_action()` in `src/pack.rs` (AC: #5)
-  - [ ] Add match arm for `"generate-agents-yaml"` in the action dispatch
-  - [ ] Call a new `generate_agents_yaml()` function
-  - [ ] Update the error message listing available actions to include `generate-agents-yaml`
-- [ ] Implement `generate_agents_yaml()` function in `src/pack.rs` (AC: #1, #2, #3, #6)
-  - [ ] Create `BmadAgentRegistry` from the manifest path
-  - [ ] Get all agents via `registry.list_agents(None)`
-  - [ ] For each agent, call `registry.get_acl(&agent.name)` to get ACL rules
-  - [ ] Build a `BTreeMap<String, BTreeMap<String, serde_yaml::Value>>` for deterministic ordering
-  - [ ] Populate each agent entry with: `description`, `model`, `max_turns`, `max_budget_usd`, `timeout_secs`, `can_invoke`, `can_respond_to`, `allowed_tools`
-  - [ ] Resolve output path from `config.agent_mesh.agents_yaml_path` or default to `config/agents.yaml`
-  - [ ] Serialize with `serde_yaml::to_string()` and prepend the header comment
-  - [ ] Write the file, creating parent directories if needed
-  - [ ] Return success JSON with file path and agent count
-- [ ] Add unit tests (AC: #1, #2, #4)
-  - [ ] Test: generate produces valid YAML with all 9 agents
-  - [ ] Test: output uses alphabetical agent ordering (BTreeMap)
-  - [ ] Test: each agent entry has all required fields
-  - [ ] Test: header comment is present
-  - [ ] Test: ACL rules in output match registry rules
-  - [ ] Test: idempotent -- running twice produces same output
-- [ ] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
+- [x] Add `generate-agents-yaml` action to `execute_action()` in `src/pack.rs` (AC: #5)
+  - [x] Add match arm for `"generate-agents-yaml"` in the action dispatch
+  - [x] Call a new `generate_agents_yaml()` function
+  - [x] Update the error message listing available actions to include `generate-agents-yaml`
+- [x] Implement `generate_agents_yaml()` function in `src/pack.rs` (AC: #1, #2, #3, #6)
+  - [x] Create `BmadAgentRegistry` from the manifest path
+  - [x] Get all agents via `registry.list_agents(None)`
+  - [x] For each agent, call `registry.get_acl(&agent.name)` to get ACL rules
+  - [x] Build a `BTreeMap<String, BTreeMap<String, serde_yaml::Value>>` for deterministic ordering
+  - [x] Populate each agent entry with: `description`, `model`, `max_turns`, `max_budget_usd`, `timeout_secs`, `can_invoke`, `can_respond_to`, `allowed_tools`
+  - [x] Resolve output path from `config.agent_mesh.agents_yaml_path` or default to `config/agents.yaml`
+  - [x] Serialize with `serde_yaml::to_string()` and prepend the header comment
+  - [x] Write the file, creating parent directories if needed
+  - [x] Return success JSON with file path and agent count
+- [x] Add unit tests (AC: #1, #2, #4)
+  - [x] Test: generate produces valid YAML with all 9 agents
+  - [x] Test: output uses alphabetical agent ordering (BTreeMap)
+  - [x] Test: each agent entry has all required fields
+  - [x] Test: header comment is present
+  - [x] Test: ACL rules in output match registry rules
+  - [x] Test: idempotent -- running twice produces same output
+- [x] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
 
 ## Dev Notes
 
@@ -216,9 +216,22 @@ This story covers the same scope as Story 16.1 from the SDK Integration epics. T
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Added `generate-agents-yaml` action dispatch with WASM gate (non-WASM: calls generate_agents_yaml(), WASM: returns error)
+- Implemented `generate_agents_yaml(config)` using BmadAgentRegistry from manifest path
+- Uses BTreeMap throughout for deterministic alphabetical YAML output
+- Each agent entry: allowed_tools, can_invoke, can_respond_to, description, max_budget_usd, max_turns, model, timeout_secs
+- Resolves output path from config.agent_mesh.agents_yaml_path or defaults to config/agents.yaml
+- Prepends header comment; creates parent directories if needed
+- Returns JSON: {status, path, agent_count}
+- serde_yaml was already in Cargo.toml dependencies
+- 7 new tests: action dispatch, valid YAML generation, alphabetical ordering, required fields, ACL rules match, idempotent, custom output path
+- All 285 tests pass; cargo clippy clean
 
 ### File List
+- src/pack.rs

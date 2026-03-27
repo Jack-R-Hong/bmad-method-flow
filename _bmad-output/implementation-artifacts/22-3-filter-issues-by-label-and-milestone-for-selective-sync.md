@@ -1,6 +1,6 @@
 # Story 22.3: Filter Issues by Label and Milestone for Selective Sync
 
-Status: review
+Status: done
 
 ## Story
 

@@ -1,6 +1,6 @@
 # Story 24.1: Implement Worktree Ownership Tracking
 
-Status: review
+Status: done
 
 ## Story
 

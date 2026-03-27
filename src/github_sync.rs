@@ -8,6 +8,10 @@ use crate::github_client::{GitHubClient, GitHubIssue};
 use crate::workspace::{GitHubSyncConfig, WorkspaceConfig};
 use pulse_plugin_sdk::error::WitPluginError;
 use serde::Serialize;
+use std::collections::HashMap;
+
+/// Pre-built index of issue_number -> (task_id, status) for batch lookups.
+type IssueTaskIndex = HashMap<u64, (String, String)>;
 
 // ── Result types ────────────────────────────────────────────────────────
 
@@ -78,28 +82,39 @@ pub fn matches_issue(config: &GitHubSyncConfig, issue: &GitHubIssue) -> bool {
 /// - Updates existing tasks when issue title/body has changed.
 /// - Closes board tasks whose corresponding GitHub issue has been closed.
 /// - Returns a `SyncResult` with counts of each action taken.
-pub fn sync_issues_to_board(
-    config: &WorkspaceConfig,
-) -> Result<SyncResult, WitPluginError> {
+pub fn sync_issues_to_board(config: &WorkspaceConfig) -> Result<SyncResult, WitPluginError> {
     let client = GitHubClient::new()?;
     let mut result = SyncResult::default();
     let sync_filter = &config.github_sync;
 
+    // Build filter params from config to pass to both open and closed issue fetches
+    let labels_param: Option<String> = if sync_filter.filter_labels.is_empty() {
+        None
+    } else {
+        Some(sync_filter.filter_labels.join(","))
+    };
+    let milestone_param: Option<&str> = sync_filter.filter_milestone.as_deref();
+
     // Fetch open issues
-    let open_issues = client.list_issues(Some("open"), None, None)?;
+    let open_issues = client.list_issues(Some("open"), labels_param.as_deref(), milestone_param)?;
     tracing::info!(
         plugin = "coding-pack",
         count = open_issues.len(),
         "Fetched open GitHub issues"
     );
 
-    // Fetch closed issues (for closing board tasks)
-    let closed_issues = client.list_issues(Some("closed"), None, None)?;
+    // Fetch closed issues (for closing board tasks) — apply same filters to reduce API traffic
+    let closed_issues =
+        client.list_issues(Some("closed"), labels_param.as_deref(), milestone_param)?;
     tracing::info!(
         plugin = "coding-pack",
         count = closed_issues.len(),
         "Fetched closed GitHub issues"
     );
+
+    // Pre-load issue_number -> (task_id, status) index in one pass to avoid
+    // O(issues * tasks) HTTP calls during sync.
+    let issue_index = board_client::build_issue_task_index(None)?;
 
     // Process open issues
     for issue in &open_issues {
@@ -114,7 +129,7 @@ pub fn sync_issues_to_board(
             continue;
         }
 
-        match sync_open_issue(issue) {
+        match sync_open_issue(issue, &issue_index) {
             Ok(action) => match action.as_str() {
                 "created" => result.created += 1,
                 "updated" => result.updated += 1,
@@ -134,7 +149,7 @@ pub fn sync_issues_to_board(
 
     // Process closed issues — close their board tasks if still open
     for issue in &closed_issues {
-        match sync_closed_issue(issue) {
+        match sync_closed_issue(issue, &issue_index) {
             Ok(closed) => {
                 if closed {
                     result.closed += 1;
@@ -147,6 +162,7 @@ pub fn sync_issues_to_board(
                     error = %e,
                     "Failed to sync closed issue"
                 );
+                result.skipped += 1;
             }
         }
     }
@@ -165,8 +181,11 @@ pub fn sync_issues_to_board(
 
 /// Sync a single open issue — create or update the corresponding board task.
 /// Returns the action taken: "created", "updated", or "skipped".
-fn sync_open_issue(issue: &GitHubIssue) -> Result<String, WitPluginError> {
-    let existing = board_client::find_task_by_issue_number(issue.number, None)?;
+fn sync_open_issue(
+    issue: &GitHubIssue,
+    issue_index: &IssueTaskIndex,
+) -> Result<String, WitPluginError> {
+    let existing = issue_index.get(&issue.number).cloned();
     let metadata = build_issue_metadata(issue);
     let description = issue.body.as_deref().unwrap_or("");
 
@@ -213,15 +232,15 @@ fn sync_open_issue(issue: &GitHubIssue) -> Result<String, WitPluginError> {
 
 /// Sync a single closed issue — if a board task exists and is not already done, close it.
 /// Returns `true` if a task was closed.
-fn sync_closed_issue(issue: &GitHubIssue) -> Result<bool, WitPluginError> {
-    let existing = board_client::find_task_by_issue_number(issue.number, None)?;
+fn sync_closed_issue(
+    issue: &GitHubIssue,
+    issue_index: &IssueTaskIndex,
+) -> Result<bool, WitPluginError> {
+    let existing = issue_index.get(&issue.number).cloned();
 
     match existing {
         Some((task_id, status)) if status != "done" => {
-            board_client::update_assignment(
-                &task_id,
-                &serde_json::json!({"status": "done"}),
-            )?;
+            board_client::update_assignment(&task_id, &serde_json::json!({"status": "done"}))?;
             tracing::info!(
                 plugin = "coding-pack",
                 issue_number = issue.number,

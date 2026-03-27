@@ -194,8 +194,16 @@ impl GitHubClient {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .user_agent("pulse-auto-dev")
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(
+                    reqwest::header::ACCEPT,
+                    reqwest::header::HeaderValue::from_static("application/vnd.github+json"),
+                );
+                headers
+            })
             .build()
-            .map_err(|e| github_err(format!("failed to build HTTP client: {e}")))?;
+            .map_err(|e| github_err(format!("build HTTP client: {e}")))?;
 
         tracing::info!(
             plugin = "coding-pack",
@@ -235,10 +243,7 @@ impl GitHubClient {
         labels: Option<&str>,
         milestone: Option<&str>,
     ) -> Result<Vec<GitHubIssue>, WitPluginError> {
-        let base_url = format!(
-            "{}/repos/{}/{}/issues",
-            self.api_url, self.owner, self.repo
-        );
+        let base_url = format!("{}/repos/{}/{}/issues", self.api_url, self.owner, self.repo);
 
         let mut all_issues: Vec<GitHubIssue> = Vec::new();
         let mut url = base_url.clone();
@@ -291,9 +296,7 @@ impl GitHubClient {
             let status = resp.status();
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
-                return Err(github_err(format!(
-                    "GET {url}: HTTP {status} — {body}"
-                )));
+                return Err(github_err(format!("GET {url}: HTTP {status} — {body}")));
             }
 
             // Parse Link header for next page before consuming body
@@ -377,9 +380,7 @@ impl GitHubClient {
 
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
-                return Err(github_err(format!(
-                    "GET {url}: HTTP {status} — {body}"
-                )));
+                return Err(github_err(format!("GET {url}: HTTP {status} — {body}")));
             }
 
             let body = resp
@@ -437,9 +438,7 @@ impl GitHubClient {
 
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
-                return Err(github_err(format!(
-                    "GET {url}: HTTP {status} — {body}"
-                )));
+                return Err(github_err(format!("GET {url}: HTTP {status} — {body}")));
             }
 
             let body = resp
@@ -465,10 +464,7 @@ impl GitHubClient {
 
     /// List all open pull requests, handling pagination.
     pub fn list_open_prs(&self) -> Result<Vec<PullRequest>, WitPluginError> {
-        let base_url = format!(
-            "{}/repos/{}/{}/pulls",
-            self.api_url, self.owner, self.repo
-        );
+        let base_url = format!("{}/repos/{}/{}/pulls", self.api_url, self.owner, self.repo);
 
         let mut all_prs: Vec<PullRequest> = Vec::new();
         let mut current_url = Some(base_url);
@@ -494,9 +490,7 @@ impl GitHubClient {
 
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
-                return Err(github_err(format!(
-                    "GET {url}: HTTP {status} — {body}"
-                )));
+                return Err(github_err(format!("GET {url}: HTTP {status} — {body}")));
             }
 
             let body = resp
@@ -542,9 +536,7 @@ impl GitHubClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().unwrap_or_default();
-            return Err(github_err(format!(
-                "GET {url}: HTTP {status} — {body}"
-            )));
+            return Err(github_err(format!("GET {url}: HTTP {status} — {body}")));
         }
 
         let body = resp
@@ -571,9 +563,10 @@ impl GitHubClient {
             .iter()
             .filter(|r| r.state == "CHANGES_REQUESTED")
             .filter_map(|r| {
-                r.body.as_ref().filter(|b| !b.is_empty()).map(|body| {
-                    format!("Reviewer: {}\n{}", r.user.login, body)
-                })
+                r.body
+                    .as_ref()
+                    .filter(|b| !b.is_empty())
+                    .map(|body| format!("Reviewer: {}\n{}", r.user.login, body))
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
@@ -665,9 +658,12 @@ impl GitHubClient {
 
 // ── Review state aggregation ─────────────────────────────────────────────
 
-/// Aggregate the review state for a PR from its list of reviews.
+/// Compute the aggregate review state for a PR from its review list.
 ///
-/// Groups by user, keeps only the latest APPROVED/CHANGES_REQUESTED per user.
+/// **Assumption:** `reviews` must be in chronological order (as returned by
+/// GitHub's REST API). The function keeps only the latest APPROVED or
+/// CHANGES_REQUESTED state per user by overwriting on iteration.
+///
 /// Returns `"changes_requested"`, `"approved"`, or `"pending"`.
 pub fn aggregate_review_state(reviews: &[PrReview]) -> &'static str {
     let mut latest_by_user: std::collections::BTreeMap<&str, &str> =
@@ -715,10 +711,20 @@ fn parse_owner_repo_from_git() -> Result<(String, String), WitPluginError> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(github_err(format!("git remote get-url origin failed: {stderr}")));
+        return Err(github_err(format!(
+            "git remote get-url origin failed: {stderr}"
+        )));
     }
 
     let remote_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if remote_url.starts_with("http://") {
+        tracing::warn!(
+            plugin = "coding-pack",
+            "Git remote uses HTTP (not HTTPS) — GITHUB_TOKEN may be transmitted in cleartext if used with this remote"
+        );
+    }
+
     parse_remote_url(&remote_url)
 }
 
@@ -800,6 +806,8 @@ fn parse_link_header_next(link: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_parse_github_remote_https() {
         let (owner, repo) = parse_remote_url("https://github.com/myorg/myrepo.git").unwrap();
@@ -830,6 +838,7 @@ mod tests {
 
     #[test]
     fn test_new_without_token_returns_error() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // Temporarily remove GITHUB_TOKEN if it exists
         let original = std::env::var("GITHUB_TOKEN").ok();
         std::env::remove_var("GITHUB_TOKEN");
@@ -863,7 +872,8 @@ mod tests {
     #[test]
     fn test_parse_link_header_none() {
         // Only rel="prev" — no next page
-        let link = r#"<https://api.github.com/repos/owner/repo/issues?page=1&per_page=100>; rel="prev""#;
+        let link =
+            r#"<https://api.github.com/repos/owner/repo/issues?page=1&per_page=100>; rel="prev""#;
         let next = parse_link_header_next(link);
         assert!(next.is_none());
     }
@@ -959,12 +969,12 @@ mod tests {
         let review: PrReview = serde_json::from_str(json).unwrap();
         assert_eq!(review.id, 100);
         assert_eq!(review.state, "CHANGES_REQUESTED");
-        assert_eq!(review.body.as_deref(), Some("Please fix the error handling"));
-        assert_eq!(review.user.login, "alice");
         assert_eq!(
-            review.submitted_at.as_deref(),
-            Some("2026-03-01T12:00:00Z")
+            review.body.as_deref(),
+            Some("Please fix the error handling")
         );
+        assert_eq!(review.user.login, "alice");
+        assert_eq!(review.submitted_at.as_deref(), Some("2026-03-01T12:00:00Z"));
     }
 
     #[test]
@@ -1209,9 +1219,10 @@ mod tests {
             .iter()
             .filter(|r| r.state == "CHANGES_REQUESTED")
             .filter_map(|r| {
-                r.body.as_ref().filter(|b| !b.is_empty()).map(|body| {
-                    format!("Reviewer: {}\n{}", r.user.login, body)
-                })
+                r.body
+                    .as_ref()
+                    .filter(|b| !b.is_empty())
+                    .map(|body| format!("Reviewer: {}\n{}", r.user.login, body))
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
@@ -1359,25 +1370,24 @@ mod tests {
     #[test]
     fn test_empty_fix_context_when_no_changes_requested() {
         // All APPROVED reviews -> empty review_summary
-        let reviews = vec![
-            PrReview {
-                id: 1,
-                state: "APPROVED".to_string(),
-                body: Some("Looks good".to_string()),
-                user: GitHubUser {
-                    login: "alice".to_string(),
-                },
-                submitted_at: None,
+        let reviews = vec![PrReview {
+            id: 1,
+            state: "APPROVED".to_string(),
+            body: Some("Looks good".to_string()),
+            user: GitHubUser {
+                login: "alice".to_string(),
             },
-        ];
+            submitted_at: None,
+        }];
 
         let summary: String = reviews
             .iter()
             .filter(|r| r.state == "CHANGES_REQUESTED")
             .filter_map(|r| {
-                r.body.as_ref().filter(|b| !b.is_empty()).map(|body| {
-                    format!("Reviewer: {}\n{}", r.user.login, body)
-                })
+                r.body
+                    .as_ref()
+                    .filter(|b| !b.is_empty())
+                    .map(|body| format!("Reviewer: {}\n{}", r.user.login, body))
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");

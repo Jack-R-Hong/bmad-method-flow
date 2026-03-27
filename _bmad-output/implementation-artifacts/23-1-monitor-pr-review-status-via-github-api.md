@@ -1,6 +1,6 @@
 # Story 23.1: Monitor PR Review Status via GitHub API
 
-Status: review
+Status: done
 
 ## Story
 
@@ -25,58 +25,58 @@ So that PRs with "changes requested" are detected and queued for automated fixes
 ## Tasks / Subtasks
 
 - [x] Task 1: Add PR review types to `src/github_client.rs` (AC: 1, 2, 3)
-  - [ ] 1.1 Define `PrReview` struct with `#[derive(Debug, Clone, Serialize, Deserialize)]`: `id: u64`, `state: String`, `body: Option<String>`, `user: GitHubUser`, `submitted_at: Option<String>`
-  - [ ] 1.2 Define `PrReviewComment` struct: `id: u64`, `path: String`, `line: Option<u32>`, `body: String`, `diff_hunk: String`, `user: GitHubUser`, `created_at: String`
-  - [ ] 1.3 Define `PullRequest` struct: `number: u64`, `title: String`, `head: PrRef`, `base: PrRef`, `html_url: String`, `user: GitHubUser`, `body: Option<String>`, `requested_reviewers: Vec<GitHubUser>`
-  - [ ] 1.4 Define `PrRef` struct: `ref_field: String` (serde rename from `"ref"`), `sha: String`
-  - [ ] 1.5 Define `GitHubUser` struct if not already present: `login: String`
+  - [x]1.1 Define `PrReview` struct with `#[derive(Debug, Clone, Serialize, Deserialize)]`: `id: u64`, `state: String`, `body: Option<String>`, `user: GitHubUser`, `submitted_at: Option<String>`
+  - [x]1.2 Define `PrReviewComment` struct: `id: u64`, `path: String`, `line: Option<u32>`, `body: String`, `diff_hunk: String`, `user: GitHubUser`, `created_at: String`
+  - [x]1.3 Define `PullRequest` struct: `number: u64`, `title: String`, `head: PrRef`, `base: PrRef`, `html_url: String`, `user: GitHubUser`, `body: Option<String>`, `requested_reviewers: Vec<GitHubUser>`
+  - [x]1.4 Define `PrRef` struct: `ref_field: String` (serde rename from `"ref"`), `sha: String`
+  - [x]1.5 Define `GitHubUser` struct if not already present: `login: String`
 
 - [x] Task 2: Implement `list_pr_reviews(pr_number)` on `GitHubClient` (AC: 1)
-  - [ ] 2.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/reviews`
-  - [ ] 2.2 Add `Authorization: Bearer {token}` and `User-Agent: pulse-auto-dev` headers
-  - [ ] 2.3 Parse response as `Vec<PrReview>`, handle pagination via `Link` header (reuse existing `parse_link_next()` helper from Story 22.1)
-  - [ ] 2.4 Add `tracing::debug!` for page count and review count -- NEVER log the token
+  - [x]2.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/reviews`
+  - [x]2.2 Add `Authorization: Bearer {token}` and `User-Agent: pulse-auto-dev` headers
+  - [x]2.3 Parse response as `Vec<PrReview>`, handle pagination via `Link` header (reuse existing `parse_link_next()` helper from Story 22.1)
+  - [x]2.4 Add `tracing::debug!` for page count and review count -- NEVER log the token
 
 - [x] Task 3: Implement `get_review_comments(pr_number)` on `GitHubClient` (AC: 2)
-  - [ ] 3.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/comments`
-  - [ ] 3.2 Parse response as `Vec<PrReviewComment>` with pagination
-  - [ ] 3.3 The `diff_hunk` field comes directly from GitHub's API response -- no custom parsing needed
+  - [x]3.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/comments`
+  - [x]3.2 Parse response as `Vec<PrReviewComment>` with pagination
+  - [x]3.3 The `diff_hunk` field comes directly from GitHub's API response -- no custom parsing needed
 
 - [x] Task 4: Implement `list_open_prs()` on `GitHubClient` (AC: 3)
-  - [ ] 4.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls?state=open&per_page=100`
-  - [ ] 4.2 Parse response as `Vec<PullRequest>` with pagination
-  - [ ] 4.3 Add `tracing::debug!` log for number of open PRs found
+  - [x]4.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls?state=open&per_page=100`
+  - [x]4.2 Parse response as `Vec<PullRequest>` with pagination
+  - [x]4.3 Add `tracing::debug!` log for number of open PRs found
 
-- [ ] Task 5: Add `check-pr-reviews` action to `src/pack.rs` (AC: 4, 6)
-  - [ ] 5.1 Add a new match arm in `execute_action()`: `"check-pr-reviews" => check_pr_reviews_value(&config)`
-  - [ ] 5.2 Implement `fn check_pr_reviews_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError>`
-  - [ ] 5.3 Instantiate `GitHubClient::new()` -- propagate error if GITHUB_TOKEN missing
-  - [ ] 5.4 Call `list_open_prs()`, filter to auto-dev PRs: branch starts with `auto-dev/` OR body contains `Co-authored-by: pulse-auto-dev`
-  - [ ] 5.5 For each matching PR, call `list_pr_reviews(pr.number)` and compute aggregate review state:
+- [x] Task 5: Add `check-pr-reviews` action to `src/pack.rs` (AC: 4, 6)
+  - [x]5.1 Add a new match arm in `execute_action()`: `"check-pr-reviews" => check_pr_reviews_value(&config)`
+  - [x]5.2 Implement `fn check_pr_reviews_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError>`
+  - [x]5.3 Instantiate `GitHubClient::new()` -- propagate error if GITHUB_TOKEN missing
+  - [x]5.4 Call `list_open_prs()`, filter to auto-dev PRs: branch starts with `auto-dev/` OR body contains `Co-authored-by: pulse-auto-dev`
+  - [x]5.5 For each matching PR, call `list_pr_reviews(pr.number)` and compute aggregate review state:
     - If any review has `state == "CHANGES_REQUESTED"` and no later `"APPROVED"` from same user -> `"changes_requested"`
     - If any review has `state == "APPROVED"` and none have `"CHANGES_REQUESTED"` after it -> `"approved"`
     - Otherwise -> `"pending"`
-  - [ ] 5.6 Return JSON array: `[{ "pr_number": N, "title": "...", "branch": "...", "review_state": "...", "html_url": "..." }]`
-  - [ ] 5.7 Update the `other =>` error message to include `"check-pr-reviews"` in the available actions list
+  - [x]5.6 Return JSON array: `[{ "pr_number": N, "title": "...", "branch": "...", "review_state": "...", "html_url": "..." }]`
+  - [x]5.7 Update the `other =>` error message to include `"check-pr-reviews"` in the available actions list
 
-- [ ] Task 6: Add `github_sync` config to `WorkspaceConfig` (AC: 5)
-  - [ ] 6.1 Define `GitHubSyncConfig` struct in `src/workspace.rs`: `review_poll_interval_secs: u64` with `#[serde(default = "default_review_poll_interval")]` (default 60)
-  - [ ] 6.2 Add `github_sync: GitHubSyncConfig` field to `WorkspaceConfig`
-  - [ ] 6.3 Add `github_sync: Option<GitHubSyncConfig>` to `ConfigYaml` struct
-  - [ ] 6.4 Wire it in `WorkspaceConfig::from_base_dir()`: `github_sync: yaml.github_sync.unwrap_or_default()`
-  - [ ] 6.5 Update `WorkspaceConfig::default_for()` to include `github_sync: GitHubSyncConfig::default()`
+- [x] Task 6: Add `github_sync` config to `WorkspaceConfig` (AC: 5)
+  - [x]6.1 Define `GitHubSyncConfig` struct in `src/workspace.rs`: `review_poll_interval_secs: u64` with `#[serde(default = "default_review_poll_interval")]` (default 60)
+  - [x]6.2 Add `github_sync: GitHubSyncConfig` field to `WorkspaceConfig`
+  - [x]6.3 Add `github_sync: Option<GitHubSyncConfig>` to `ConfigYaml` struct
+  - [x]6.4 Wire it in `WorkspaceConfig::from_base_dir()`: `github_sync: yaml.github_sync.unwrap_or_default()`
+  - [x]6.5 Update `WorkspaceConfig::default_for()` to include `github_sync: GitHubSyncConfig::default()`
 
-- [ ] Task 7: Write unit tests (AC: 1, 2, 3, 4, 5, 6)
-  - [ ] 7.1 `test_pr_review_deserialization` -- deserialize sample GitHub PR review JSON into `PrReview`
-  - [ ] 7.2 `test_pr_review_comment_deserialization` -- deserialize sample inline comment JSON into `PrReviewComment`
-  - [ ] 7.3 `test_pull_request_deserialization` -- deserialize sample PR JSON into `PullRequest`
-  - [ ] 7.4 `test_aggregate_review_state_changes_requested` -- verify `changes_requested` beats older `approved`
-  - [ ] 7.5 `test_aggregate_review_state_approved` -- verify `approved` with no subsequent `changes_requested`
-  - [ ] 7.6 `test_aggregate_review_state_pending` -- verify `pending` when no reviews exist
-  - [ ] 7.7 `test_github_sync_config_default` -- verify default `review_poll_interval_secs` is 60
-  - [ ] 7.8 `test_github_sync_config_parsed` -- verify custom value from YAML
-  - [ ] 7.9 `test_filter_auto_dev_prs_by_branch` -- verify PRs with `auto-dev/` prefix are matched
-  - [ ] 7.10 `test_filter_auto_dev_prs_by_body` -- verify PRs with `Co-authored-by: pulse-auto-dev` in body are matched
+- [x] Task 7: Write unit tests (AC: 1, 2, 3, 4, 5, 6)
+  - [x]7.1 `test_pr_review_deserialization` -- deserialize sample GitHub PR review JSON into `PrReview`
+  - [x]7.2 `test_pr_review_comment_deserialization` -- deserialize sample inline comment JSON into `PrReviewComment`
+  - [x]7.3 `test_pull_request_deserialization` -- deserialize sample PR JSON into `PullRequest`
+  - [x]7.4 `test_aggregate_review_state_changes_requested` -- verify `changes_requested` beats older `approved`
+  - [x]7.5 `test_aggregate_review_state_approved` -- verify `approved` with no subsequent `changes_requested`
+  - [x]7.6 `test_aggregate_review_state_pending` -- verify `pending` when no reviews exist
+  - [x]7.7 `test_github_sync_config_default` -- verify default `review_poll_interval_secs` is 60
+  - [x]7.8 `test_github_sync_config_parsed` -- verify custom value from YAML
+  - [x]7.9 `test_filter_auto_dev_prs_by_branch` -- verify PRs with `auto-dev/` prefix are matched
+  - [x]7.10 `test_filter_auto_dev_prs_by_body` -- verify PRs with `Co-authored-by: pulse-auto-dev` in body are matched
 
 ## Dev Notes
 
@@ -308,9 +308,25 @@ All required crates are already in `Cargo.toml`:
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Added `GitHubUser`, `PrReview`, `PrReviewComment`, `PrRef`, `PullRequest`, `FixContext`, `FileCommentGroup`, `InlineComment` types to `src/github_client.rs`
+- Implemented `list_pr_reviews()`, `get_review_comments()`, `list_open_prs()`, `get_pull_request()`, `build_fix_context()`, `request_reviewers()` methods on `GitHubClient`
+- Added `aggregate_review_state()` and `is_auto_dev_pr()` helper functions
+- Added `check-pr-reviews` and `build-fix-context` actions in `src/pack.rs`
+- Extended `GitHubSyncConfig` with `review_poll_interval_secs` field (default: 60)
+- Added 15+ unit tests for deserialization, aggregation, filtering, and config
+- Fixed `github_sync.rs` tests to use `..Default::default()` for new field
 
 ### File List
+- `src/github_client.rs` -- PR types, methods, helpers, tests
+- `src/pack.rs` -- `check-pr-reviews` and `build-fix-context` actions
+- `src/workspace.rs` -- `review_poll_interval_secs` on `GitHubSyncConfig`
+- `src/github_sync.rs` -- fixed struct literals for new field
+
+### Change Log
+- 2026-03-28: Story 23-1 implemented (all 7 tasks complete)

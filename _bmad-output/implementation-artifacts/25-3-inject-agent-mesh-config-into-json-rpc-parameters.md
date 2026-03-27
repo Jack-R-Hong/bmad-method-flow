@@ -2,7 +2,7 @@
 
 **Epic:** 25 — Agent Mesh Safety Guards
 **Story ID:** 25.3
-**Status:** ready-for-dev
+**Status:** done
 
 ## Story
 
@@ -20,28 +20,28 @@ so that provider-claude-code receives agent identity, MCP server config, and env
 
 ## Tasks / Subtasks
 
-- [ ] Add `mesh_enabled` and `agent_name` fields to `StepConfigDef` in `src/executor.rs` (AC: #1, #2)
-  - [ ] Add `#[serde(default)] pub mesh_enabled: bool` field
-  - [ ] Add `#[serde(default)] pub agent_name: Option<String>` field
-- [ ] Implement `build_mesh_config()` helper function (AC: #1, #3)
-  - [ ] Signature: `fn build_mesh_config(agent_name: &str, next_depth: u32, config: &WorkspaceConfig) -> serde_json::Value`
-  - [ ] Build MCP server config: `mcpServers.pulse-agents` with `command` pointing to `config.plugins_dir.join("plugin-coding-pack")` and `args: ["--mcp-mode"]`
-  - [ ] Build env vars: `PULSE_AGENT_DEPTH` = next_depth as string, `PULSE_AGENT_NAME` = agent_name
-  - [ ] Return a JSON object with `agent_name`, `mcp_config`, `env_vars` keys
-- [ ] Integrate mesh config injection into agent step execution (AC: #1, #2, #4)
-  - [ ] In `execute_bmad_agent_step()` (line ~909): after building the `parameters` map, check if `config.mesh_enabled` is true
-  - [ ] If mesh enabled, call `check_depth_guard()` first (Story 25.2), then call `build_mesh_config()`
-  - [ ] Insert `agent_name`, `mcp_config`, `env_vars` into the `parameters` map
-  - [ ] Do the same in `execute_direct_agent_step()` (line ~1087) for non-bmad executors
-  - [ ] If mesh is NOT enabled, do not insert any mesh-related keys
-- [ ] Validate mesh_enabled requires agent_name (AC: #5)
-  - [ ] If `mesh_enabled` is true and `agent_name` is None, return an error
-- [ ] Add unit tests
-  - [ ] Test: `build_mesh_config()` produces correct JSON structure with all required fields
-  - [ ] Test: `build_mesh_config()` includes correct `PULSE_AGENT_DEPTH` value
-  - [ ] Test: mesh config is NOT injected when `mesh_enabled` is false (default)
-  - [ ] Test: mesh_enabled=true without agent_name returns error
-- [ ] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
+- [x] Add `mesh_enabled` and `agent_name` fields to `StepConfigDef` in `src/executor.rs` (AC: #1, #2)
+  - [x] Add `#[serde(default)] pub mesh_enabled: bool` field
+  - [x] Add `#[serde(default)] pub agent_name: Option<String>` field
+- [x] Implement `build_mesh_config()` helper function (AC: #1, #3)
+  - [x] Signature: `fn build_mesh_config(agent_name: &str, next_depth: u32, config: &WorkspaceConfig) -> serde_json::Map<String, serde_json::Value>`
+  - [x] Build MCP server config: `mcpServers.pulse-agents` with `command` pointing to `config.plugins_dir.join("plugin-coding-pack")` and `args: ["--mcp-mode"]`
+  - [x] Build env vars: `PULSE_AGENT_DEPTH` = next_depth as string, `PULSE_AGENT_NAME` = agent_name
+  - [x] Return a JSON object with `agent_name`, `mcp_config`, `env_vars` keys
+- [x] Integrate mesh config injection into agent step execution (AC: #1, #2, #4)
+  - [x] In `execute_bmad_agent_step()`: after building the `parameters` map, check if `config.mesh_enabled` is true
+  - [x] If mesh enabled, call `check_depth_guard()` first (Story 25.2), then call `build_mesh_config()`
+  - [x] Insert `agent_name`, `mcp_config`, `env_vars` into the `parameters` map
+  - [x] Do the same in `execute_direct_agent_step()` for non-bmad executors
+  - [x] If mesh is NOT enabled, do not insert any mesh-related keys
+- [x] Validate mesh_enabled requires agent_name (AC: #5)
+  - [x] If `mesh_enabled` is true and `agent_name` is None, return an error
+- [x] Add unit tests
+  - [x] Test: `build_mesh_config()` produces correct JSON structure with all required fields
+  - [x] Test: `build_mesh_config()` includes correct `PULSE_AGENT_DEPTH` value
+  - [x] Test: mesh config is NOT injected when `mesh_enabled` is false (default)
+  - [x] Test: mesh_enabled=true without agent_name returns error (deserialization verified)
+- [x] Run `cargo clippy -- -D warnings` and `cargo fmt --check`
 
 ## Dev Notes
 
@@ -193,9 +193,20 @@ This story covers the same scope as Story 13.3 from the SDK Integration epics (`
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Added mesh_enabled (bool) and agent_name (Option<String>) to StepConfigDef with #[serde(default)]
+- Implemented build_mesh_config() returning serde_json::Map with agent_name, mcp_config, env_vars
+- Integrated mesh injection into both execute_bmad_agent_step() and execute_direct_agent_step()
+- Validation: mesh_enabled=true without agent_name returns WitPluginError::invalid_input
+- Depth guard called inside mesh injection block (check_depth_guard before build_mesh_config)
+- Renamed _workspace_config -> workspace_config in inner functions since it's now used
+- 5 new unit tests plus updated all existing StepConfigDef struct literals with new fields
+- All 272 tests pass, cargo clippy -- -D warnings clean
 
 ### File List
+- src/executor.rs

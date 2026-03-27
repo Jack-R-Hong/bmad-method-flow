@@ -36,7 +36,6 @@ impl BmadToolProvider {
     pub fn new(config: WorkspaceConfig) -> Self {
         Self { config }
     }
-
 }
 
 // Compile-time assertion that BmadToolProvider is Send + Sync.
@@ -178,7 +177,10 @@ impl ToolProvider for BmadToolProvider {
                 .get("endpoint")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    ToolError::invalid_arguments(format!("{} requires 'endpoint' parameter", call.name))
+                    ToolError::invalid_arguments(format!(
+                        "{} requires 'endpoint' parameter",
+                        call.name
+                    ))
                 })?;
             Some(ep.to_string())
         } else {
@@ -247,7 +249,13 @@ mod tests {
         }
 
         // Low sensitivity: read-only tools
-        let low_tools = ["bmad_validate_pack", "bmad_list_workflows", "bmad_list_plugins", "bmad_data_query", "bmad_board_list"];
+        let low_tools = [
+            "bmad_validate_pack",
+            "bmad_list_workflows",
+            "bmad_list_plugins",
+            "bmad_data_query",
+            "bmad_board_list",
+        ];
         let high_tools = ["bmad_auto_dev_next"];
         for tool in &tools {
             if low_tools.contains(&tool.name.as_str()) {

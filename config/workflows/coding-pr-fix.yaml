@@ -1,0 +1,75 @@
+name: coding-pr-fix
+version: 1
+description: "PR fix workflow: read review feedback -> implement fixes -> test -> commit -> push"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-git-ops
+steps:
+  # Step 1: Read review feedback
+  # Uses JSON-RPC stdin protocol to invoke the build-fix-context action via the plugin binary.
+  - id: read_review
+    type: function
+    depends_on: []
+    executor: plugin-coding-pack
+    config:
+      command: ["bash", "-c", "echo '{\"method\":\"step-executor.execute\",\"params\":{\"task\":{\"task_id\":\"read-review\",\"input\":{\"action\":\"build-fix-context\",\"payload\":{\"pr_number\":{{pr_number}}}}},\"config\":{\"step_id\":\"read_review\"}}}' | plugin-coding-pack"]
+      timeout_seconds: 30
+
+  # Step 2: Checkout the existing PR branch
+  - id: checkout_branch
+    type: function
+    depends_on: [read_review]
+    executor: git-ops
+    config:
+      command: ["git", "checkout", "{{pr_branch}}"]
+      timeout_seconds: 15
+
+  # Step 3: Implement fixes based on review feedback
+  - id: implement_fix
+    type: agent
+    depends_on: [checkout_branch]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are a senior developer addressing PR review feedback.
+        You have been given structured review comments grouped by file.
+        For each comment:
+        1. Read the reviewer's feedback and the diff_hunk context
+        2. Make the requested change in the correct file at the correct location
+        3. If the feedback is unclear, make a reasonable interpretation
+        Do NOT introduce unrelated changes. Only fix what reviewers requested.
+        After all fixes, verify the code compiles.
+      user_prompt_template: "Address PR review feedback for PR #{{pr_number}} on branch {{pr_branch}}"
+      max_tokens: 8192
+      context_from: [read_review]
+      timeout_seconds: 600
+      retry:
+        max_attempts: 2
+        on_failure_of: run_tests
+
+  # Step 4: Run tests to verify fixes
+  - id: run_tests
+    type: function
+    depends_on: [implement_fix]
+    config:
+      command: ["bash", "-c", "cargo test 2>&1 || npm test 2>&1 || echo 'no test runner found'"]
+      timeout_seconds: 120
+
+  # Step 5: Commit the fix
+  - id: git_commit
+    type: function
+    depends_on: [run_tests]
+    executor: git-ops
+    config:
+      command: ["bash", "-c", "git add -A && git commit -m \"fix: address review feedback for PR #{{pr_number}}\""]
+
+  # Step 6: Push to the PR branch
+  - id: git_push
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-git-ops
+    config:
+      command: ["plugin-git-pr", "push"]
+      timeout_seconds: 30

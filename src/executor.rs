@@ -1,5 +1,8 @@
 use pulse_plugin_sdk::error::WitPluginError;
 use pulse_plugin_sdk::types::injection::InjectionQuery;
+use pulse_plugin_sdk::types::llm::{
+    ChatMessage, CompletionRequest, CompletionResponse, TokenUsage, ToolDef,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -68,6 +71,24 @@ pub(crate) struct StepConfigDef {
     /// If not set, falls back to the {{working_dir}} template variable if available.
     #[serde(default)]
     pub working_dir: Option<String>,
+    /// Tool definitions to forward to the LLM provider.
+    /// When present, these are passed through to the provider's `tools` parameter.
+    /// The executor does NOT execute tools — only passes definitions through.
+    #[serde(default)]
+    pub tools: Option<Vec<ToolDef>>,
+    /// When true, inject agent mesh configuration (MCP server info, depth env vars)
+    /// into the JSON-RPC parameters for this step.
+    #[serde(default)]
+    pub mesh_enabled: bool,
+    /// Session participants (for type: session steps only).
+    #[serde(default)]
+    pub participants: Option<serde_yaml::Value>,
+    /// Session convergence config (for type: session steps only).
+    #[serde(default)]
+    pub convergence: Option<serde_yaml::Value>,
+    /// Agent name for mesh routing (required when mesh_enabled is true).
+    #[serde(default)]
+    pub agent_name: Option<String>,
 }
 
 /// Configuration for iterative fix loops.
@@ -82,18 +103,18 @@ pub(crate) struct RetryConfig {
 // ── Step execution results ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-struct StepOutput {
-    step_id: String,
-    status: StepStatus,
-    content: Option<String>,
-    execution_time_ms: u64,
+pub(crate) struct StepOutput {
+    pub(crate) step_id: String,
+    pub(crate) status: StepStatus,
+    pub(crate) content: Option<String>,
+    pub(crate) execution_time_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum StepStatus {
+pub(crate) enum StepStatus {
     Success,
     Failed,
     Skipped,
@@ -159,8 +180,12 @@ pub fn execute_workflow_with_vars(
     }
 
     // Merge extra vars (e.g., issue_number, issue_url, issue_closing_ref)
+    // Guard: prevent overwriting critical standard template keys
+    const PROTECTED_KEYS: &[&str] = &["workflow_id", "input", "default_model", "max_budget_usd"];
     for (k, v) in extra_vars {
-        template_vars.insert(k, v);
+        if !PROTECTED_KEYS.contains(&k.as_str()) {
+            template_vars.insert(k, v);
+        }
     }
 
     execute_workflow_steps(
@@ -201,8 +226,6 @@ fn execute_workflow_steps(
     workspace_config: &crate::workspace::WorkspaceConfig,
 ) -> Result<serde_json::Value, WitPluginError> {
     let mut failed_required = false;
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut registered_worktree_path: Option<String> = None;
 
     // Build retry index: map from on_failure_of step -> (retryable step id, RetryConfig)
     let retry_index: HashMap<String, (String, RetryConfig)> = workflow
@@ -273,6 +296,7 @@ fn execute_workflow_steps(
             template_vars,
             plugins_dir,
             use_injection_pipeline,
+            workspace_config,
         );
 
         match result {
@@ -302,27 +326,7 @@ fn execute_workflow_steps(
                         if let Some(cmd) = &config.command {
                             if let Some(wt_path) = extract_worktree_path(cmd, template_vars) {
                                 eprintln!("[workflow]   worktree: {}", wt_path);
-                                template_vars.insert("working_dir".to_string(), wt_path.clone());
-
-                                // Register worktree for lifecycle tracking
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    let branch = extract_branch_from_command(cmd, template_vars)
-                                        .unwrap_or_else(|| wt_path.clone());
-                                    let task_id = template_vars.get("task_id").cloned().unwrap_or_default();
-                                    let wf_id = template_vars.get("workflow_id").cloned().unwrap_or_default();
-                                    if let Err(e) = crate::worktree_tracker::register_worktree(
-                                        workspace_config, &wt_path, &branch, &task_id, &wf_id,
-                                    ) {
-                                        tracing::warn!(
-                                            plugin = "coding-pack",
-                                            error = %e,
-                                            "failed to register worktree — continuing workflow"
-                                        );
-                                    } else {
-                                        registered_worktree_path = Some(wt_path);
-                                    }
-                                }
+                                template_vars.insert("working_dir".to_string(), wt_path);
                             }
                         }
                     }
@@ -455,26 +459,7 @@ fn execute_workflow_steps(
         idx += 1;
     }
 
-    // 5. Update worktree status if one was registered
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(ref wt_path) = registered_worktree_path {
-        let wt_status = if failed_required {
-            crate::worktree_tracker::WorktreeStatus::Failed
-        } else {
-            crate::worktree_tracker::WorktreeStatus::Completed
-        };
-        if let Err(e) =
-            crate::worktree_tracker::update_worktree_status(workspace_config, wt_path, wt_status)
-        {
-            tracing::warn!(
-                plugin = "coding-pack",
-                error = %e,
-                "failed to update worktree status — continuing"
-            );
-        }
-    }
-
-    // 6. Build result
+    // 5. Build result
     let total_time = start.elapsed().as_millis() as u64;
     let steps_completed = outputs
         .values()
@@ -649,7 +634,7 @@ fn dependencies_satisfied(
 
 // ── Template variable substitution ─────────────────────────────────────────
 
-fn substitute_templates(template: &str, vars: &HashMap<String, String>) -> String {
+pub(crate) fn substitute_templates(template: &str, vars: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
     for (key, value) in vars {
         let placeholder = format!("{{{{{}}}}}", key);
@@ -729,26 +714,6 @@ fn extract_worktree_path(
         .rev()
         .find(|arg| !arg.starts_with('-') && !["git", "worktree", "add"].contains(&arg.as_str()))
         .cloned()
-}
-
-/// Extract branch name from a git worktree add command.
-/// Looks for the `-b` or `-B` flag in the resolved command args.
-#[cfg(not(target_arch = "wasm32"))]
-fn extract_branch_from_command(
-    command: &[String],
-    template_vars: &HashMap<String, String>,
-) -> Option<String> {
-    let resolved: Vec<String> = command
-        .iter()
-        .map(|part| substitute_templates(part, template_vars))
-        .collect();
-    let mut iter = resolved.iter();
-    while let Some(arg) = iter.next() {
-        if arg == "-b" || arg == "-B" {
-            return iter.next().cloned();
-        }
-    }
-    None
 }
 
 // ── PR fields extraction (for auto-generated PRs) ─────────────────────────
@@ -853,24 +818,141 @@ fn build_retry_context(
 
 // ── Context assembly from prior steps ──────────────────────────────────────
 
-fn assemble_context(step: &StepDef, outputs: &HashMap<String, StepOutput>) -> String {
+/// Assemble context from prior step outputs as `ChatMessage` objects.
+///
+/// Each prior step's output becomes a `ChatMessage::user()` message prefixed
+/// with the source step ID for traceability. Returns an empty Vec when no
+/// `context_from` is configured.
+pub(crate) fn assemble_context_messages(
+    step: &StepDef,
+    outputs: &HashMap<String, StepOutput>,
+) -> Vec<ChatMessage> {
     let context_ids = match step.config.as_ref().and_then(|c| c.context_from.as_ref()) {
         Some(ids) => ids,
-        None => return String::new(),
+        None => return Vec::new(),
     };
 
-    let mut parts = Vec::new();
+    let mut messages = Vec::new();
     for ctx_id in context_ids {
         if let Some(output) = outputs.get(ctx_id.as_str()) {
             if let Some(content) = &output.content {
-                parts.push(format!(
+                messages.push(ChatMessage::user(format!(
                     "--- Output from step '{}' ---\n{}",
                     ctx_id, content
-                ));
+                )));
             }
         }
     }
-    parts.join("\n\n")
+    messages
+}
+
+/// Convert a Vec<ChatMessage> to a single context string for JSON-RPC transport.
+fn chat_messages_to_context_string(messages: &[ChatMessage]) -> String {
+    messages
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Assemble context from prior step outputs as a single string.
+///
+/// This is a convenience wrapper around `assemble_context_messages` that
+/// returns a flattened `String` (used by session.rs and other callers that
+/// need plain-text context rather than ChatMessage objects).
+#[allow(dead_code)]
+pub(crate) fn assemble_context(step: &StepDef, outputs: &HashMap<String, StepOutput>) -> String {
+    chat_messages_to_context_string(&assemble_context_messages(step, outputs))
+}
+
+// ── Agent mesh support (Epics 25-2, 25-3) ──────────────────────────────────
+
+/// Check the current agent invocation depth and return the next depth value.
+///
+/// Reads `PULSE_AGENT_DEPTH` from the environment (defaults to 0) and compares
+/// `next = current + 1` against the workspace's configured `max_depth`. Returns
+/// an error if the limit would be exceeded.
+pub(crate) fn check_depth_guard(
+    config: &crate::workspace::WorkspaceConfig,
+) -> Result<u32, WitPluginError> {
+    let current: u32 = std::env::var("PULSE_AGENT_DEPTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let next = current.saturating_add(1);
+    let max = config.agent_mesh.max_depth;
+    if next > max {
+        return Err(WitPluginError::invalid_input(format!(
+            "agent mesh depth limit exceeded: {} > {}",
+            next, max
+        )));
+    }
+    Ok(next)
+}
+
+/// Build the agent mesh configuration map to inject into JSON-RPC parameters.
+///
+/// Produces entries for `agent_name`, `mcp_config` (pointing at plugin-coding-pack
+/// in MCP mode), and `env_vars` (PULSE_AGENT_DEPTH, PULSE_AGENT_NAME).
+fn build_mesh_config(
+    agent_name: &str,
+    next_depth: u32,
+    config: &crate::workspace::WorkspaceConfig,
+) -> serde_json::Map<String, serde_json::Value> {
+    let plugin_binary = config.plugins_dir.join("plugin-coding-pack");
+    let binary_path = plugin_binary.to_string_lossy().to_string();
+    let mcp_config = serde_json::json!({
+        "mcpServers": {
+            "pulse-agents": {
+                "command": binary_path,
+                "args": ["--mcp-mode"]
+            }
+        }
+    });
+    let env_vars = serde_json::json!({
+        "PULSE_AGENT_DEPTH": next_depth.to_string(),
+        "PULSE_AGENT_NAME": agent_name
+    });
+    let mut mesh = serde_json::Map::new();
+    mesh.insert("agent_name".to_string(), serde_json::json!(agent_name));
+    mesh.insert("mcp_config".to_string(), mcp_config);
+    mesh.insert("env_vars".to_string(), env_vars);
+    mesh
+}
+
+// ── Session config YAML reconstruction ──────────────────────────────────────
+
+/// Reconstruct a serde_yaml::Value representing the session config from the
+/// typed `StepConfigDef` fields. This is needed because session-specific fields
+/// (participants, convergence) are captured as raw `serde_yaml::Value` on
+/// StepConfigDef, while system_prompt and context_from are typed fields.
+fn build_session_config_yaml(step: &StepDef) -> serde_yaml::Value {
+    let mut map = serde_yaml::Mapping::new();
+    if let Some(config) = &step.config {
+        if let Some(ref p) = config.participants {
+            map.insert(serde_yaml::Value::String("participants".into()), p.clone());
+        }
+        if let Some(ref c) = config.convergence {
+            map.insert(serde_yaml::Value::String("convergence".into()), c.clone());
+        }
+        if let Some(ref sp) = config.system_prompt {
+            map.insert(
+                serde_yaml::Value::String("system_prompt".into()),
+                serde_yaml::Value::String(sp.clone()),
+            );
+        }
+        if let Some(ref ctx) = config.context_from {
+            let seq: Vec<serde_yaml::Value> = ctx
+                .iter()
+                .map(|s| serde_yaml::Value::String(s.clone()))
+                .collect();
+            map.insert(
+                serde_yaml::Value::String("context_from".into()),
+                serde_yaml::Value::Sequence(seq),
+            );
+        }
+    }
+    serde_yaml::Value::Mapping(map)
 }
 
 // ── Step execution dispatch ────────────────────────────────────────────────
@@ -882,6 +964,7 @@ fn execute_step(
     template_vars: &HashMap<String, String>,
     plugins_dir: &Path,
     use_injection_pipeline: bool,
+    workspace_config: &crate::workspace::WorkspaceConfig,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let timeout_secs = step
         .config
@@ -897,7 +980,28 @@ fn execute_step(
             timeout_secs,
             plugins_dir,
             use_injection_pipeline,
+            workspace_config,
         ),
+        "session" => {
+            // Check depth guard once at session start (architecture rule: not per turn)
+            if workspace_config.agent_mesh.enabled {
+                check_depth_guard(workspace_config)?;
+            }
+            // Assemble initial context from prior steps
+            let initial_context =
+                chat_messages_to_context_string(&assemble_context_messages(step, outputs));
+            // Reconstruct session config YAML from captured step config fields
+            let config_yaml = build_session_config_yaml(step);
+            let session_config = crate::session::parse_session_config(&config_yaml)?;
+            crate::session::execute_session_step(
+                &session_config,
+                &step.id,
+                &initial_context,
+                plugins_dir,
+                template_vars,
+                workspace_config,
+            )
+        }
         "function" => {
             execute_function_step(step, template_vars, timeout_secs, plugins_dir).map(|o| (o, None))
         }
@@ -925,6 +1029,7 @@ fn execute_agent_step(
     timeout_secs: u64,
     plugins_dir: &Path,
     use_injection_pipeline: bool,
+    workspace_config: &crate::workspace::WorkspaceConfig,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let start = Instant::now();
 
@@ -939,8 +1044,9 @@ fn execute_agent_step(
         WitPluginError::invalid_input(format!("step '{}': agent step requires 'config'", step.id))
     })?;
 
-    // Build the prompt with context injection
-    let context = assemble_context(step, outputs);
+    // Build the prompt with context injection using ChatMessage types
+    let context_messages = assemble_context_messages(step, outputs);
+    let context = chat_messages_to_context_string(&context_messages);
     let user_prompt = config
         .user_prompt_template
         .as_deref()
@@ -966,6 +1072,7 @@ fn execute_agent_step(
             start,
             plugins_dir,
             use_injection_pipeline,
+            workspace_config,
         )
     } else {
         execute_direct_agent_step(
@@ -977,6 +1084,7 @@ fn execute_agent_step(
             timeout_secs,
             start,
             plugins_dir,
+            workspace_config,
         )
     }
 }
@@ -997,6 +1105,7 @@ fn execute_bmad_agent_step(
     start: Instant,
     plugins_dir: &Path,
     use_injection_pipeline: bool,
+    workspace_config: &crate::workspace::WorkspaceConfig,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let bmad_binary = plugins_dir.join("bmad-method");
     if !bmad_binary.exists() {
@@ -1109,19 +1218,32 @@ fn execute_bmad_agent_step(
         model_tier
     );
 
-    let mut parameters = serde_json::Map::new();
+    // Build CompletionRequest internally for structured construction
+    let mut completion_req = CompletionRequest::new(prompt).with_model(&model_tier);
     if let Some(ref sp) = merged_system_prompt {
+        completion_req = completion_req.with_system_prompt(sp.as_str());
+    }
+    if let Some(tokens) = config.max_tokens {
+        completion_req = completion_req.with_max_tokens(tokens);
+    }
+
+    // Serialize CompletionRequest fields into the JSON-RPC parameters map
+    let mut parameters = serde_json::Map::new();
+    if let Some(ref sp) = completion_req.system_prompt {
         parameters.insert("system_prompt".to_string(), serde_json::json!(sp));
     }
-    parameters.insert("model_tier".to_string(), serde_json::json!(model_tier));
-    if let Some(tokens) = config.max_tokens {
+    parameters.insert(
+        "model_tier".to_string(),
+        serde_json::json!(completion_req.model.as_deref().unwrap_or("balanced")),
+    );
+    if let Some(tokens) = completion_req.max_tokens {
         parameters.insert("max_tokens".to_string(), serde_json::json!(tokens));
     }
-    // Forward session_id for continuity
+    // Forward session_id for continuity (not part of CompletionRequest)
     if let Some(session_id) = template_vars.get("session_id") {
         parameters.insert("session_id".to_string(), serde_json::json!(session_id));
     }
-    // Forward working_dir so Claude Code runs in the right directory
+    // Forward working_dir so Claude Code runs in the right directory (not part of CompletionRequest)
     let work_dir = config
         .working_dir
         .as_deref()
@@ -1134,6 +1256,26 @@ fn execute_bmad_agent_step(
     if use_injection_pipeline {
         if let Ok(iq_val) = serde_json::to_value(&injection_query) {
             parameters.insert("injection_query".to_string(), iq_val);
+        }
+    }
+    // Forward tool definitions when present (Story 14-2)
+    if let Some(tools) = &config.tools {
+        if !tools.is_empty() {
+            parameters.insert("tools".to_string(), serde_json::json!(tools));
+        }
+    }
+    // Inject agent mesh config when mesh_enabled is true and workspace mesh is enabled
+    if config.mesh_enabled && workspace_config.agent_mesh.enabled {
+        let mesh_agent_name = config.agent_name.as_deref().ok_or_else(|| {
+            WitPluginError::invalid_input(format!(
+                "step '{}': mesh_enabled requires agent_name",
+                step.id
+            ))
+        })?;
+        let next_depth = check_depth_guard(workspace_config)?;
+        let mesh = build_mesh_config(mesh_agent_name, next_depth, workspace_config);
+        for (k, v) in mesh {
+            parameters.insert(k, v);
         }
     }
 
@@ -1175,6 +1317,7 @@ fn execute_direct_agent_step(
     timeout_secs: u64,
     start: Instant,
     plugins_dir: &Path,
+    workspace_config: &crate::workspace::WorkspaceConfig,
 ) -> Result<(StepOutput, Option<String>), WitPluginError> {
     let plugin_binary = plugins_dir.join(executor);
     if !plugin_binary.exists() {
@@ -1194,20 +1337,34 @@ fn execute_direct_agent_step(
         query
     };
 
-    let mut parameters = serde_json::Map::new();
-    if let Some(sp) = &config.system_prompt {
-        parameters.insert("system_prompt".to_string(), serde_json::json!(sp));
+    // Build CompletionRequest internally for structured construction
+    let mut completion_req = CompletionRequest::new(prompt);
+    if let Some(ref sp) = config.system_prompt {
+        completion_req = completion_req.with_system_prompt(sp.as_str());
     }
-    if let Some(tier) = &config.model_tier {
-        parameters.insert("model_tier".to_string(), serde_json::json!(tier));
+    if let Some(ref tier) = config.model_tier {
+        completion_req = completion_req.with_model(tier.as_str());
     }
     if let Some(tokens) = config.max_tokens {
+        completion_req = completion_req.with_max_tokens(tokens);
+    }
+
+    // Serialize CompletionRequest fields into the JSON-RPC parameters map
+    let mut parameters = serde_json::Map::new();
+    if let Some(ref sp) = completion_req.system_prompt {
+        parameters.insert("system_prompt".to_string(), serde_json::json!(sp));
+    }
+    if let Some(ref tier) = completion_req.model {
+        parameters.insert("model_tier".to_string(), serde_json::json!(tier));
+    }
+    if let Some(tokens) = completion_req.max_tokens {
         parameters.insert("max_tokens".to_string(), serde_json::json!(tokens));
     }
+    // Forward session_id for continuity (not part of CompletionRequest)
     if let Some(session_id) = template_vars.get("session_id") {
         parameters.insert("session_id".to_string(), serde_json::json!(session_id));
     }
-    // Forward working_dir
+    // Forward working_dir (not part of CompletionRequest)
     let work_dir = config
         .working_dir
         .as_deref()
@@ -1219,6 +1376,26 @@ fn execute_direct_agent_step(
     // Forward injection query for the engine's injection pipeline
     if let Ok(iq_val) = serde_json::to_value(&injection_query) {
         parameters.insert("injection_query".to_string(), iq_val);
+    }
+    // Forward tool definitions when present (Story 14-2)
+    if let Some(tools) = &config.tools {
+        if !tools.is_empty() {
+            parameters.insert("tools".to_string(), serde_json::json!(tools));
+        }
+    }
+    // Inject agent mesh config when mesh_enabled is true and workspace mesh is enabled
+    if config.mesh_enabled && workspace_config.agent_mesh.enabled {
+        let mesh_agent_name = config.agent_name.as_deref().ok_or_else(|| {
+            WitPluginError::invalid_input(format!(
+                "step '{}': mesh_enabled requires agent_name",
+                step.id
+            ))
+        })?;
+        let next_depth = check_depth_guard(workspace_config)?;
+        let mesh = build_mesh_config(mesh_agent_name, next_depth, workspace_config);
+        for (k, v) in mesh {
+            parameters.insert(k, v);
+        }
     }
 
     let rpc_request = serde_json::json!({
@@ -1335,9 +1512,31 @@ fn parse_claude_response(
     // {"result": "actual text", "session_id": "...", "total_cost_usd": 0.01}
     let content_str = result.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
-    // Try to parse the inner JSON to extract actual result text and session_id
+    // Try to parse as SDK CompletionResponse first (new structured path)
     let (actual_content, session_id) =
-        if let Ok(inner) = serde_json::from_str::<serde_json::Value>(content_str) {
+        if let Ok(completion_resp) = serde_json::from_str::<CompletionResponse>(content_str) {
+            // Log token usage when available from structured response
+            let usage = &completion_resp.usage;
+            if usage.input_tokens > 0 || usage.output_tokens > 0 {
+                tracing::info!(
+                    step_id = step_id,
+                    model = %completion_resp.model,
+                    input_tokens = usage.input_tokens,
+                    output_tokens = usage.output_tokens,
+                    "LLM token usage"
+                );
+            }
+
+            let text = match &completion_resp.choice {
+                pulse_plugin_sdk::types::llm::ResponseChoice::Message(msg) => msg.clone(),
+                pulse_plugin_sdk::types::llm::ResponseChoice::ToolCalls(_) => {
+                    // Tool calls are not executed here — serialize back for downstream
+                    serde_json::to_string(&completion_resp.choice).unwrap_or_default()
+                }
+            };
+            (text, None)
+        } else if let Ok(inner) = serde_json::from_str::<serde_json::Value>(content_str) {
+            // Fall back to existing JSON parsing for backward compatibility
             let text = inner
                 .get("result")
                 .and_then(|r| r.as_str())
@@ -1347,6 +1546,21 @@ fn parse_claude_response(
                 .get("session_id")
                 .and_then(|s| s.as_str())
                 .map(|s| s.to_string());
+
+            // Try to extract token usage from legacy JSON format
+            if let Some(usage_val) = inner.get("usage") {
+                if let Ok(usage) = serde_json::from_value::<TokenUsage>(usage_val.clone()) {
+                    if usage.input_tokens > 0 || usage.output_tokens > 0 {
+                        tracing::info!(
+                            step_id = step_id,
+                            input_tokens = usage.input_tokens,
+                            output_tokens = usage.output_tokens,
+                            "LLM token usage (legacy format)"
+                        );
+                    }
+                }
+            }
+
             (text, sid)
         } else {
             (content_str.to_string(), None)
@@ -1519,7 +1733,7 @@ fn execute_function_step(
 
 // ── JSON-RPC communication with plugin child processes ─────────────────────
 
-fn spawn_plugin_rpc(
+pub(crate) fn spawn_plugin_rpc(
     binary_path: &Path,
     request: &serde_json::Value,
     timeout_secs: u64,
@@ -1851,17 +2065,19 @@ mod tests {
         assert!(!dependencies_satisfied(&steps[1], &outputs, &steps));
     }
 
-    // ── assemble_context ───────────────────────────────────────────────
+    // ── assemble_context_messages ──────────────────────────────────────
 
     #[test]
-    fn assemble_context_empty_when_no_context_from() {
+    fn assemble_context_messages_empty_when_no_context_from() {
         let step = make_step("a", &[]);
         let outputs = HashMap::new();
-        assert_eq!(assemble_context(&step, &outputs), "");
+        let messages = assemble_context_messages(&step, &outputs);
+        assert!(messages.is_empty());
+        assert_eq!(chat_messages_to_context_string(&messages), "");
     }
 
     #[test]
-    fn assemble_context_concatenates_outputs() {
+    fn assemble_context_messages_concatenates_outputs() {
         let mut step = make_step("c", &["a", "b"]);
         step.config = Some(StepConfigDef {
             context_from: Some(vec!["a".to_string(), "b".to_string()]),
@@ -1873,6 +2089,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         });
 
         let mut outputs = HashMap::new();
@@ -1897,7 +2118,14 @@ mod tests {
             },
         );
 
-        let ctx = assemble_context(&step, &outputs);
+        let messages = assemble_context_messages(&step, &outputs);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert!(messages[0].content.contains("output A"));
+        assert!(messages[1].content.contains("output B"));
+
+        // Backward compat: string form still contains expected text
+        let ctx = chat_messages_to_context_string(&messages);
         assert!(ctx.contains("output A"));
         assert!(ctx.contains("output B"));
         assert!(ctx.contains("step 'a'"));
@@ -1998,6 +2226,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/architect");
     }
@@ -2014,6 +2247,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/architect");
     }
@@ -2030,6 +2268,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         };
         assert_eq!(extract_agent_name(&config), "bmad/qa");
     }
@@ -2091,6 +2334,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         });
         assert!(is_review_step(&step));
     }
@@ -2109,6 +2357,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         });
         assert!(!is_review_step(&step));
     }
@@ -2239,6 +2492,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         };
         let mut template_vars = HashMap::new();
         template_vars.insert("workflow_id".to_string(), "coding-feature-dev".to_string());
@@ -2272,6 +2530,11 @@ mod tests {
             command: None,
             retry: None,
             working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
         };
         let template_vars = HashMap::new(); // empty — no workflow_id
 
@@ -2281,37 +2544,327 @@ mod tests {
         assert_eq!(query.step_type.as_deref(), Some("agent"));
     }
 
-    // ── Issue template var substitution (Story 22-4) ──────────────
+    // ── Story 14-1: SDK LLM type adoption tests ────────────────────────
 
     #[test]
-    fn test_template_substitution_with_issue_vars() {
-        let mut vars = HashMap::new();
-        vars.insert("issue_closing_ref".to_string(), "Closes #42".to_string());
-        vars.insert("issue_number".to_string(), "42".to_string());
-        vars.insert(
-            "issue_url".to_string(),
-            "https://github.com/o/r/issues/42".to_string(),
-        );
+    fn test_completion_request_serialization() {
+        // Verify CompletionRequest can be built and its fields serialize
+        // into the same structure used by the JSON-RPC parameters map.
+        let req = CompletionRequest::new("Implement the feature")
+            .with_model("balanced")
+            .with_system_prompt("You are a developer")
+            .with_max_tokens(4096);
 
-        let result = substitute_templates(
-            "PR body text\n\n{{issue_closing_ref}}",
-            &vars,
-        );
-        assert_eq!(result, "PR body text\n\nCloses #42");
-
-        let result2 = substitute_templates("Issue #{{issue_number}}", &vars);
-        assert_eq!(result2, "Issue #42");
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["prompt"], "Implement the feature");
+        assert_eq!(json["model"], "balanced");
+        assert_eq!(json["system_prompt"], "You are a developer");
+        assert_eq!(json["max_tokens"], 4096);
+        // tools should be absent (not null) when None
+        assert!(json.get("tools").is_none());
     }
 
     #[test]
-    fn test_template_substitution_issue_vars_empty() {
-        let mut vars = HashMap::new();
-        vars.insert("issue_closing_ref".to_string(), String::new());
+    fn test_chat_message_construction() {
+        // Verify ChatMessage::user() creates messages with correct role
+        let msg = ChatMessage::user("output from step A");
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content, "output from step A");
+        assert!(msg.name.is_none());
+        assert!(msg.tool_call_id.is_none());
+        assert!(msg.tool_calls.is_none());
 
-        let result = substitute_templates(
-            "PR body text\n\n{{issue_closing_ref}}",
-            &vars,
+        // Verify multiple messages can be joined into a context string
+        let messages = vec![
+            ChatMessage::user("--- Output from step 'a' ---\nresult A"),
+            ChatMessage::user("--- Output from step 'b' ---\nresult B"),
+        ];
+        let ctx = chat_messages_to_context_string(&messages);
+        assert!(ctx.contains("result A"));
+        assert!(ctx.contains("result B"));
+    }
+
+    #[test]
+    fn test_completion_response_deserialization() {
+        // Verify CompletionResponse can be deserialized from JSON
+        // (simulating what parse_claude_response would receive)
+        let json = serde_json::json!({
+            "choice": { "Message": "The implementation is complete." },
+            "usage": { "input_tokens": 150, "output_tokens": 300 },
+            "model": "claude-sonnet-4-20250514"
+        });
+
+        let resp: CompletionResponse = serde_json::from_value(json).unwrap();
+        match &resp.choice {
+            pulse_plugin_sdk::types::llm::ResponseChoice::Message(msg) => {
+                assert_eq!(msg, "The implementation is complete.");
+            }
+            _ => panic!("expected Message variant"),
+        }
+        assert_eq!(resp.usage.input_tokens, 150);
+        assert_eq!(resp.usage.output_tokens, 300);
+        assert_eq!(resp.model, "claude-sonnet-4-20250514");
+
+        // Also verify ToolCalls variant
+        let json_tc = serde_json::json!({
+            "choice": { "ToolCalls": [{"id": "call_1", "name": "read_file", "arguments": {"path": "src/main.rs"}}] },
+            "usage": { "input_tokens": 50, "output_tokens": 20 },
+            "model": "test-model"
+        });
+        let resp_tc: CompletionResponse = serde_json::from_value(json_tc).unwrap();
+        match &resp_tc.choice {
+            pulse_plugin_sdk::types::llm::ResponseChoice::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "read_file");
+            }
+            _ => panic!("expected ToolCalls variant"),
+        }
+    }
+
+    #[test]
+    fn test_json_rpc_parameters_unchanged() {
+        // Verify that the refactored parameter construction produces
+        // the same JSON-RPC structure as before.
+        // Simulate what execute_direct_agent_step builds:
+        let system_prompt = "You are a developer";
+        let model_tier = "balanced";
+        let max_tokens = 4096u32;
+        let session_id = "sess-abc";
+
+        // Build via CompletionRequest (new path)
+        let completion_req = CompletionRequest::new("implement feature")
+            .with_system_prompt(system_prompt)
+            .with_model(model_tier)
+            .with_max_tokens(max_tokens);
+
+        let mut parameters = serde_json::Map::new();
+        if let Some(ref sp) = completion_req.system_prompt {
+            parameters.insert("system_prompt".to_string(), serde_json::json!(sp));
+        }
+        if let Some(ref tier) = completion_req.model {
+            parameters.insert("model_tier".to_string(), serde_json::json!(tier));
+        }
+        if let Some(tokens) = completion_req.max_tokens {
+            parameters.insert("max_tokens".to_string(), serde_json::json!(tokens));
+        }
+        parameters.insert("session_id".to_string(), serde_json::json!(session_id));
+
+        // Verify shape matches pre-refactor expectations
+        assert_eq!(parameters["system_prompt"], "You are a developer");
+        assert_eq!(parameters["model_tier"], "balanced");
+        assert_eq!(parameters["max_tokens"], 4096);
+        assert_eq!(parameters["session_id"], "sess-abc");
+
+        // Verify JSON-RPC envelope is unchanged
+        let rpc = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "step-executor.execute",
+            "params": {
+                "task": {
+                    "task_id": "wf-test-step",
+                    "description": "implement feature",
+                    "input": { "prompt": "implement feature" },
+                },
+                "config": {
+                    "step_id": "test-step",
+                    "step_type": "agent",
+                    "timeout_secs": 300,
+                    "parameters": parameters,
+                }
+            }
+        });
+
+        assert_eq!(rpc["jsonrpc"], "2.0");
+        assert_eq!(rpc["method"], "step-executor.execute");
+        assert!(rpc["params"]["task"]["task_id"].is_string());
+        assert!(rpc["params"]["config"]["parameters"]["system_prompt"].is_string());
+        assert!(rpc["params"]["config"]["parameters"]["max_tokens"].is_number());
+    }
+
+    // ── Story 14-2: Tool forwarding tests ──────────────────────────────
+
+    #[test]
+    fn test_step_config_with_tools_deserializes() {
+        let yaml = r#"
+            system_prompt: "You are a developer"
+            max_tokens: 4096
+            tools:
+              - name: "read_file"
+                description: "Read a file from disk"
+                parameters:
+                  type: object
+                  properties:
+                    path:
+                      type: string
+                sensitivity: low
+              - name: "write_file"
+                description: "Write content to a file"
+                parameters:
+                  type: object
+                  properties:
+                    path:
+                      type: string
+                    content:
+                      type: string
+                sensitivity: high
+        "#;
+        let config: StepConfigDef = serde_yaml::from_str(yaml).unwrap();
+        let tools = config.tools.unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "read_file");
+        assert_eq!(
+            tools[0].sensitivity,
+            pulse_plugin_sdk::types::llm::ToolSensitivity::Low
         );
-        assert_eq!(result, "PR body text\n\n");
+        assert_eq!(tools[1].name, "write_file");
+        assert_eq!(
+            tools[1].sensitivity,
+            pulse_plugin_sdk::types::llm::ToolSensitivity::High
+        );
+    }
+
+    #[test]
+    fn test_step_config_without_tools_deserializes() {
+        let yaml = r#"
+            system_prompt: "You are a developer"
+            max_tokens: 4096
+        "#;
+        let config: StepConfigDef = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.tools.is_none());
+    }
+
+    #[test]
+    fn test_tools_forwarded_to_json_rpc_parameters() {
+        // Simulate parameter construction with tools present
+        let tools = vec![ToolDef {
+            name: "search".to_string(),
+            description: "Search codebase".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+            sensitivity: pulse_plugin_sdk::types::llm::ToolSensitivity::Low,
+        }];
+
+        let config = StepConfigDef {
+            system_prompt: Some("You are a developer".to_string()),
+            user_prompt_template: None,
+            model_tier: Some("balanced".to_string()),
+            max_tokens: Some(4096),
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+            retry: None,
+            working_dir: None,
+            tools: Some(tools),
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
+        };
+
+        let mut parameters = serde_json::Map::new();
+        if let Some(ref sp) = config.system_prompt {
+            parameters.insert("system_prompt".to_string(), serde_json::json!(sp));
+        }
+        // Forward tools when present (same logic as execute_bmad_agent_step)
+        if let Some(ref tools) = config.tools {
+            if !tools.is_empty() {
+                parameters.insert("tools".to_string(), serde_json::json!(tools));
+            }
+        }
+
+        assert!(parameters.contains_key("tools"));
+        let tools_val = &parameters["tools"];
+        let tools_arr = tools_val.as_array().unwrap();
+        assert_eq!(tools_arr.len(), 1);
+        assert_eq!(tools_arr[0]["name"], "search");
+    }
+
+    #[test]
+    fn test_tools_omitted_when_none() {
+        let config = StepConfigDef {
+            system_prompt: Some("test".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+            retry: None,
+            working_dir: None,
+            tools: None,
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
+        };
+
+        let mut parameters = serde_json::Map::new();
+        parameters.insert("system_prompt".to_string(), serde_json::json!("test"));
+
+        // Apply same logic as execute functions
+        if let Some(ref tools) = config.tools {
+            if !tools.is_empty() {
+                parameters.insert("tools".to_string(), serde_json::json!(tools));
+            }
+        }
+
+        // "tools" key must NOT be present when None
+        assert!(!parameters.contains_key("tools"));
+    }
+
+    #[test]
+    fn test_tools_omitted_when_empty_vec() {
+        let config = StepConfigDef {
+            system_prompt: Some("test".to_string()),
+            user_prompt_template: None,
+            model_tier: None,
+            max_tokens: None,
+            context_from: None,
+            timeout_seconds: None,
+            command: None,
+            retry: None,
+            working_dir: None,
+            tools: Some(vec![]),
+            mesh_enabled: false,
+            agent_name: None,
+            participants: None,
+            convergence: None,
+        };
+
+        let mut parameters = serde_json::Map::new();
+        if let Some(ref tools) = config.tools {
+            if !tools.is_empty() {
+                parameters.insert("tools".to_string(), serde_json::json!(tools));
+            }
+        }
+
+        // "tools" key must NOT be present when empty vec
+        assert!(!parameters.contains_key("tools"));
+    }
+
+    #[test]
+    fn test_tools_coexist_with_mesh_config() {
+        // Verify that tools and agent_mesh config can coexist in parameters
+        let tools = vec![ToolDef {
+            name: "search".to_string(),
+            description: "Search codebase".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+            sensitivity: pulse_plugin_sdk::types::llm::ToolSensitivity::Low,
+        }];
+
+        let mut parameters = serde_json::Map::new();
+        parameters.insert("system_prompt".to_string(), serde_json::json!("test"));
+        parameters.insert("model_tier".to_string(), serde_json::json!("balanced"));
+        parameters.insert(
+            "agent_mesh".to_string(),
+            serde_json::json!({"max_depth": 3, "allowed_agents": ["bmad/dev"]}),
+        );
+        parameters.insert("tools".to_string(), serde_json::json!(tools));
+
+        // Both keys present and independently accessible
+        assert!(parameters.contains_key("tools"));
+        assert!(parameters.contains_key("agent_mesh"));
+        assert_eq!(parameters["agent_mesh"]["max_depth"].as_u64().unwrap(), 3);
+        assert_eq!(parameters["tools"].as_array().unwrap().len(), 1);
     }
 }

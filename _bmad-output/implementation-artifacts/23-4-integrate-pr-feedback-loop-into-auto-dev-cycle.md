@@ -1,6 +1,6 @@
 # Story 23.4: Integrate PR Feedback Loop into Auto-Dev Cycle
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -12,7 +12,7 @@ So that the review-fix cycle runs autonomously without manual intervention.
 
 1. **Given** `auto_dev.rs` has the existing `pick_next_task()` flow, **When** `check_pending_reviews()` is added as a secondary task source, **Then** PRs with `changes_requested` status are returned as fix tasks with priority higher than regular board tasks. Specifically, `pick_next_task()` first checks `check_pending_reviews()` and returns a PR fix task if one exists; only if no PR fixes are pending does it fall through to the original board `list_assignments()` path.
 
-2. **Given** a PR fix task is picked, **When** the auto-dev loop executes it, **Then** the `coding-pr-fix` workflow is selected automatically (not via label routing -- the fix task has `workflow_id: "coding-pr-fix"` set explicitly), **And** template variables include `pr_number`, `pr_branch`, `pr_url` from the PR metadata, **And** the board task status is updated to `in-progress` during fix, then back to `review` after push.
+2. **Given** a PR fix task is picked, **When** the auto-dev loop executes it, **Then** the `coding-pr-fix` workflow is selected automatically (not via label routing -- the fix task has `workflow_id: "coding-pr-fix"` set explicitly), **And** template variables include `pr_number`, `pr_branch`, `pr_url` from the PR metadata. **Note:** Board status updates (`in-progress` → `review`) are skipped for PR fix tasks because they use synthetic IDs (`pr-fix-{N}`) not present in the board plugin (see Task 6.4).
 
 3. **Given** the fix workflow completes and pushes commits, **When** the re-request review step runs, **Then** a GitHub API call requests re-review from the original reviewers via `POST /repos/{owner}/{repo}/pulls/{pr_number}/requested_reviewers` with body `{"reviewers": ["reviewer1", "reviewer2"]}`.
 
@@ -26,22 +26,22 @@ So that the review-fix cycle runs autonomously without manual intervention.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `request_reviewers()` method to `GitHubClient` (AC: 3)
-  - [ ] 1.1 Implement `fn request_reviewers(&self, pr_number: u64, reviewers: &[String]) -> Result<(), WitPluginError>` on `GitHubClient`
-  - [ ] 1.2 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/requested_reviewers`
-  - [ ] 1.3 Send `POST` with JSON body: `{"reviewers": ["user1", "user2"]}`
-  - [ ] 1.4 Check response status: 201 Created = success, else return `WitPluginError::internal` with the error message
-  - [ ] 1.5 Add `tracing::info!` on success: `"Re-requested review from {N} reviewers for PR #{pr_number}"`
+- [x] Task 1: Add `request_reviewers()` method to `GitHubClient` (AC: 3)
+  - [x]1.1 Implement `fn request_reviewers(&self, pr_number: u64, reviewers: &[String]) -> Result<(), WitPluginError>` on `GitHubClient`
+  - [x]1.2 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/requested_reviewers`
+  - [x]1.3 Send `POST` with JSON body: `{"reviewers": ["user1", "user2"]}`
+  - [x]1.4 Check response status: 201 Created = success, else return `WitPluginError::internal` with the error message
+  - [x]1.5 Add `tracing::info!` on success: `"Re-requested review from {N} reviewers for PR #{pr_number}"`
 
-- [ ] Task 2: Add `check_pending_reviews()` function in `src/auto_dev.rs` (AC: 1, 4, 5, 6, 7)
-  - [ ] 2.1 Implement `fn check_pending_reviews(config: &WorkspaceConfig) -> Result<Option<Assignment>, WitPluginError>`
-  - [ ] 2.2 Attempt to create `GitHubClient::new()` -- if it fails (no token), return `Ok(None)` (graceful degradation)
-  - [ ] 2.3 Call `client.list_open_prs()` to get all open PRs
-  - [ ] 2.4 Filter to auto-dev PRs using `is_auto_dev_pr()` from Story 23.1
-  - [ ] 2.5 For each auto-dev PR, call `client.list_pr_reviews(pr.number)` and compute aggregate state using `aggregate_review_state()` from Story 23.1
-  - [ ] 2.6 Filter to PRs with `changes_requested` state -- skip `approved` and `pending`
-  - [ ] 2.7 If multiple PRs need fixes, pick the one with the lowest PR number (oldest first -- FIFO)
-  - [ ] 2.8 Construct an `Assignment` from the PR:
+- [x] Task 2: Add `check_pending_reviews()` function in `src/auto_dev.rs` (AC: 1, 4, 5, 6, 7)
+  - [x]2.1 Implement `fn check_pending_reviews(config: &WorkspaceConfig) -> Result<Option<Assignment>, WitPluginError>`
+  - [x]2.2 Attempt to create `GitHubClient::new()` -- if it fails (no token), return `Ok(None)` (graceful degradation)
+  - [x]2.3 Call `client.list_open_prs()` to get all open PRs
+  - [x]2.4 Filter to auto-dev PRs using `is_auto_dev_pr()` from Story 23.1
+  - [x]2.5 For each auto-dev PR, call `client.list_pr_reviews(pr.number)` and compute aggregate state using `aggregate_review_state()` from Story 23.1
+  - [x]2.6 Filter to PRs with `changes_requested` state -- skip `approved` and `pending`
+  - [x]2.7 If multiple PRs need fixes, pick the one with the lowest PR number (oldest first -- FIFO)
+  - [x]2.8 Construct an `Assignment` from the PR:
     ```rust
     Assignment {
         id: format!("pr-fix-{}", pr.number),
@@ -54,18 +54,18 @@ So that the review-fix cycle runs autonomously without manual intervention.
         assignee: String::new(),
     }
     ```
-  - [ ] 2.9 Return `Ok(Some(assignment))` or `Ok(None)` if no PRs need fixes
+  - [x]2.9 Return `Ok(Some(assignment))` or `Ok(None)` if no PRs need fixes
 
-- [ ] Task 3: Modify `pick_next_task()` to check PR reviews first (AC: 1)
-  - [ ] 3.1 At the top of `pick_next_task()`, call `check_pending_reviews(config)?`
-  - [ ] 3.2 If `Some(assignment)` is returned, return it immediately (PR fixes have priority)
-  - [ ] 3.3 If `None`, fall through to existing `board_client::list_assignments()` logic
+- [x] Task 3: Modify `pick_next_task()` to check PR reviews first (AC: 1)
+  - [x]3.1 At the top of `pick_next_task()`, call `check_pending_reviews(config)?`
+  - [x]3.2 If `Some(assignment)` is returned, return it immediately (PR fixes have priority)
+  - [x]3.3 If `None`, fall through to existing `board_client::list_assignments()` logic
 
-- [ ] Task 4: Add PR metadata to workflow execution context (AC: 2)
-  - [ ] 4.1 In `auto_dev_next()`, detect PR fix tasks by checking `task.id.starts_with("pr-fix-")`
-  - [ ] 4.2 Extract `pr_number` from the task ID: parse the number after `"pr-fix-"`
-  - [ ] 4.3 Extract `pr_branch` from the task description (parse from `"Branch: {branch}"`)
-  - [ ] 4.4 Build enhanced `user_input` that includes PR metadata for template variable resolution:
+- [x] Task 4: Add PR metadata to workflow execution context (AC: 2)
+  - [x]4.1 In `auto_dev_next()`, detect PR fix tasks by checking `task.id.starts_with("pr-fix-")`
+  - [x]4.2 Extract `pr_number` from the task ID: parse the number after `"pr-fix-"`
+  - [x]4.3 Extract `pr_branch` from the task description (parse from `"Branch: {branch}"`)
+  - [x]4.4 Build enhanced `user_input` that includes PR metadata for template variable resolution:
     ```rust
     if task.id.starts_with("pr-fix-") {
         let pr_number = task.id.strip_prefix("pr-fix-").unwrap_or("0");
@@ -87,40 +87,40 @@ So that the review-fix cycle runs autonomously without manual intervention.
         }
     }
     ```
-  - [ ] 4.5 Ensure `resolve_workflow_id()` returns `"coding-pr-fix"` for PR fix tasks (the explicit `workflow_id` field on the Assignment takes priority -- this is already handled by the existing `if !assignment.workflow_id.is_empty()` check at line 30-32 of `auto_dev.rs`)
+  - [x]4.5 Ensure `resolve_workflow_id()` returns `"coding-pr-fix"` for PR fix tasks (the explicit `workflow_id` field on the Assignment takes priority -- this is already handled by the existing `if !assignment.workflow_id.is_empty()` check at line 30-32 of `auto_dev.rs`)
 
-- [ ] Task 5: Add re-request review after successful push (AC: 3)
-  - [ ] 5.1 In `auto_dev_next()`, after the workflow succeeds and tests pass (the success branch at line 169), add a PR-fix-specific post-step
-  - [ ] 5.2 Detect PR fix task: `if task.id.starts_with("pr-fix-")`
-  - [ ] 5.3 Parse `pr_number` from task ID
-  - [ ] 5.4 Create `GitHubClient::new()` and call `client.get_pull_request(pr_number)` to get the list of `requested_reviewers`
-  - [ ] 5.5 If the PR has previous reviewers, extract reviewer logins from the reviews (get unique users who left `CHANGES_REQUESTED` reviews)
-  - [ ] 5.6 Call `client.request_reviewers(pr_number, &reviewer_logins)?`
-  - [ ] 5.7 If `request_reviewers` fails, log a warning but do NOT fail the entire auto-dev result -- the fix commits are already pushed
-  - [ ] 5.8 Add board comment: `"[auto-dev] PR fix pushed. Re-requested review from: {reviewers}"`
+- [x] Task 5: Add re-request review after successful push (AC: 3)
+  - [x]5.1 In `auto_dev_next()`, after the workflow succeeds and tests pass (the success branch at line 169), add a PR-fix-specific post-step
+  - [x]5.2 Detect PR fix task: `if task.id.starts_with("pr-fix-")`
+  - [x]5.3 Parse `pr_number` from task ID
+  - [x]5.4 Create `GitHubClient::new()` and call `client.get_pull_request(pr_number)` to get the list of `requested_reviewers`
+  - [x]5.5 If the PR has previous reviewers, extract reviewer logins from the reviews (get unique users who left `CHANGES_REQUESTED` reviews)
+  - [x]5.6 Call `client.request_reviewers(pr_number, &reviewer_logins)?`
+  - [x]5.7 If `request_reviewers` fails, log a warning but do NOT fail the entire auto-dev result -- the fix commits are already pushed
+  - [x]5.8 Add board comment: `"[auto-dev] PR fix pushed. Re-requested review from: {reviewers}"`
 
-- [ ] Task 6: Handle board status updates for PR fix tasks (AC: 2)
-  - [ ] 6.1 PR fix tasks have synthetic IDs like `"pr-fix-42"` that do NOT exist in the board plugin
-  - [ ] 6.2 In `auto_dev_next()`, wrap the `board_client::update_assignment()` and `board_client::add_comment()` calls with a guard: if the task ID starts with `"pr-fix-"`, skip board updates (or catch and log the error)
-  - [ ] 6.3 The board status tracking for PR fix tasks is informational only -- the real state is tracked via GitHub PR review status
-  - [ ] 6.4 Alternative approach: if the original board task can be identified (by matching PR branch to a board task), update that task instead. For v1, skip board updates for PR fix tasks and log the action.
+- [x] Task 6: Handle board status updates for PR fix tasks (AC: 2)
+  - [x]6.1 PR fix tasks have synthetic IDs like `"pr-fix-42"` that do NOT exist in the board plugin
+  - [x]6.2 In `auto_dev_next()`, wrap the `board_client::update_assignment()` and `board_client::add_comment()` calls with a guard: if the task ID starts with `"pr-fix-"`, skip board updates (or catch and log the error)
+  - [x]6.3 The board status tracking for PR fix tasks is informational only -- the real state is tracked via GitHub PR review status
+  - [x]6.4 Alternative approach: if the original board task can be identified (by matching PR branch to a board task), update that task instead. For v1, skip board updates for PR fix tasks and log the action.
 
-- [ ] Task 7: Write unit tests (AC: 1, 4, 5, 6, 7)
-  - [ ] 7.1 `test_check_pending_reviews_returns_none_without_token` -- verify graceful `Ok(None)` when GITHUB_TOKEN is unset
-  - [ ] 7.2 `test_pr_fix_assignment_construction` -- verify `Assignment` fields: id format, title format, priority is "critical", workflow_id is "coding-pr-fix"
-  - [ ] 7.3 `test_pr_fix_task_has_higher_priority_than_board` -- verify `priority_rank("critical") < priority_rank("high")`
-  - [ ] 7.4 `test_pick_next_task_prioritizes_pr_fixes` -- mock scenario: verify PR fix returned before board task (unit test with constructed assignments, no HTTP)
-  - [ ] 7.5 `test_detect_pr_fix_task_by_id_prefix` -- verify `task.id.starts_with("pr-fix-")` detection
-  - [ ] 7.6 `test_parse_pr_number_from_task_id` -- verify extraction of `42` from `"pr-fix-42"`
-  - [ ] 7.7 `test_parse_branch_from_description` -- verify extraction of branch name from description format
-  - [ ] 7.8 `test_skip_approved_prs` -- verify PRs with `approved` state are not returned as fix tasks
-  - [ ] 7.9 `test_skip_pending_prs` -- verify PRs with `pending` state (no reviews) are not returned
-  - [ ] 7.10 `test_fifo_ordering_for_multiple_fix_prs` -- verify lowest PR number is picked first
+- [x] Task 7: Write unit tests (AC: 1, 4, 5, 6, 7)
+  - [x]7.1 `test_check_pending_reviews_returns_none_without_token` -- verify graceful `Ok(None)` when GITHUB_TOKEN is unset
+  - [x]7.2 `test_pr_fix_assignment_construction` -- verify `Assignment` fields: id format, title format, priority is "critical", workflow_id is "coding-pr-fix"
+  - [x]7.3 `test_pr_fix_task_has_higher_priority_than_board` -- verify `priority_rank("critical") < priority_rank("high")`
+  - [x]7.4 `test_pick_next_task_prioritizes_pr_fixes` -- mock scenario: verify PR fix returned before board task (unit test with constructed assignments, no HTTP)
+  - [x]7.5 `test_detect_pr_fix_task_by_id_prefix` -- verify `task.id.starts_with("pr-fix-")` detection
+  - [x]7.6 `test_parse_pr_number_from_task_id` -- verify extraction of `42` from `"pr-fix-42"`
+  - [x]7.7 `test_parse_branch_from_description` -- verify extraction of branch name from description format
+  - [x]7.8 `test_skip_approved_prs` -- verify PRs with `approved` state are not returned as fix tasks
+  - [x]7.9 `test_skip_pending_prs` -- verify PRs with `pending` state (no reviews) are not returned
+  - [x]7.10 `test_fifo_ordering_for_multiple_fix_prs` -- verify lowest PR number is picked first
 
-- [ ] Task 8: Add `use` imports in `auto_dev.rs` (AC: all)
-  - [ ] 8.1 Add `#[cfg(not(target_arch = "wasm32"))]` gated import for `crate::github_client::GitHubClient`
-  - [ ] 8.2 Ensure the `check_pending_reviews()` function is also gated with `#[cfg(not(target_arch = "wasm32"))]` since it uses `GitHubClient`
-  - [ ] 8.3 For WASM builds, provide a stub `check_pending_reviews()` that always returns `Ok(None)`
+- [x] Task 8: Add `use` imports in `auto_dev.rs` (AC: all)
+  - [x]8.1 Add `#[cfg(not(target_arch = "wasm32"))]` gated import for `crate::github_client::GitHubClient`
+  - [x]8.2 Ensure the `check_pending_reviews()` function is also gated with `#[cfg(not(target_arch = "wasm32"))]` since it uses `GitHubClient`
+  - [x]8.3 For WASM builds, provide a stub `check_pending_reviews()` that always returns `Ok(None)`
 
 ## Dev Notes
 
@@ -359,9 +359,25 @@ All required crates already in `Cargo.toml`. `std::collections::BTreeMap` is fro
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- `request_reviewers()` already implemented in Story 23-1 (co-implemented)
+- Added `check_pending_reviews()` with `#[cfg(not(target_arch = "wasm32"))]` gate and WASM stub
+- Modified `pick_next_task()` to check PR reviews first (PR fixes get critical priority)
+- Modified `auto_dev_next()` with board status guard for synthetic pr-fix task IDs
+- PR metadata (pr_number, pr_branch) injected as template vars for coding-pr-fix workflow
+- Added `re_request_review_for_pr_fix()` best-effort function with WASM stub
+- Graceful degradation: no GITHUB_TOKEN -> Ok(None), API failures -> warn + continue
+- FIFO ordering: lowest PR number (oldest) picked first when multiple PRs need fixes
+- 10 unit tests covering assignment construction, parsing, priority, FIFO ordering, graceful degradation
 
 ### File List
+- `src/auto_dev.rs` -- check_pending_reviews(), pick_next_task() modification, auto_dev_next() board guard, re_request_review_for_pr_fix(), WASM stubs, tests
+- `src/github_client.rs` -- request_reviewers() (from 23-1)
+
+### Change Log
+- 2026-03-28: Story 23-4 implemented (all 8 tasks complete)
