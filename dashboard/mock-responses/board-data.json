@@ -1,85 +1,17 @@
 {
   "project": "bmad-method-flow",
-  "last_updated": "2026-03-26",
-  "phases": [
-    { "id": 1, "label": "Phase 1: Core Plugin Development" },
-    { "id": 2, "label": "Phase 2: SDK Integration & Agent Mesh" },
-    { "id": 3, "label": "Phase 3: Config Injection & Tool Provider" }
-  ],
+  "last_updated": "",
+  "phases": [],
   "summary": {
-    "total_epics": 21,
-    "total_stories": 58,
-    "done_epics": 15,
-    "done_stories": 42,
+    "total_epics": 0,
+    "total_stories": 0,
+    "done_epics": 0,
+    "done_stories": 0,
     "in_progress_stories": 0,
-    "ready_stories": 16,
+    "ready_stories": 0,
     "backlog_stories": 0,
     "review_stories": 0,
-    "progress_pct": 72.4
+    "progress_pct": 0
   },
-  "items": [
-    {
-      "id": "epic-1",
-      "type": "epic",
-      "title": "Claude Code Executor Plugin (claude-code-v2)",
-      "status": "done",
-      "phase": 1,
-      "epic_id": "epic-1",
-      "story_count": 5,
-      "stories_done": 5,
-      "progress_pct": 100.0
-    },
-    {
-      "id": "1-1-crate-scaffolding-and-process-manager",
-      "type": "story",
-      "title": "Crate Scaffolding and Process Manager",
-      "status": "done",
-      "phase": 1,
-      "epic_id": "epic-1",
-      "epic_title": "Claude Code Executor Plugin (claude-code-v2)",
-      "story_number": "1.1"
-    },
-    {
-      "id": "1-2-config-parsing-and-cli-parameter-configuration",
-      "type": "story",
-      "title": "Config Parsing and Cli Parameter Configuration",
-      "status": "done",
-      "phase": 1,
-      "epic_id": "epic-1",
-      "epic_title": "Claude Code Executor Plugin (claude-code-v2)",
-      "story_number": "1.2"
-    },
-    {
-      "id": "epic-12",
-      "type": "epic",
-      "title": "BMAD Agent Registry and Discovery",
-      "status": "in-progress",
-      "phase": 2,
-      "epic_id": "epic-12",
-      "story_count": 3,
-      "stories_done": 0,
-      "progress_pct": 0.0
-    },
-    {
-      "id": "12-1-create-bmadagentregistry-struct-with-agent-definition-constants",
-      "type": "story",
-      "title": "Create Bmadagentregistry Struct with Agent Definition Constants",
-      "status": "ready-for-dev",
-      "phase": 2,
-      "epic_id": "epic-12",
-      "epic_title": "BMAD Agent Registry and Discovery",
-      "story_number": "12.1"
-    },
-    {
-      "id": "epic-18",
-      "type": "epic",
-      "title": "BMAD Methodology Markdown Config (Phase 1 — zero code)",
-      "status": "done",
-      "phase": 3,
-      "epic_id": "epic-18",
-      "story_count": 4,
-      "stories_done": 4,
-      "progress_pct": 100.0
-    }
-  ]
+  "items": []
 }

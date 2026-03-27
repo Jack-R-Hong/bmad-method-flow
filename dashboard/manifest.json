@@ -86,7 +86,7 @@
       "title": "Workflow Detail",
       "path": "/workflows/:id",
       "icon": "git-branch",
-      "nav_order": -1,
+      "nav_order": 99,
       "description": "Detailed workflow steps and execution history",
       "layout": {
         "type": "detail",
@@ -287,7 +287,7 @@
       "title": "Epic Detail",
       "path": "/board/epics/:id",
       "icon": "layers",
-      "nav_order": -1,
+      "nav_order": 98,
       "description": "Epic details including stories and progress",
       "layout": {
         "type": "detail",

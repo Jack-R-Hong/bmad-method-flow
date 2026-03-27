@@ -19,7 +19,14 @@ fn main() {
     let agent_registry = BmadAgentRegistry::new(&manifest_path);
     // Combined adapter: handles step-executor + dashboard-extension + config-injector + tool-provider + agent-definition methods
     pulse_plugin_sdk::dev_adapter::run_custom_stdio(move |method, params| {
-        dispatch_combined(&plugin, &injector, &tool_provider, &agent_registry, method, params)
+        dispatch_combined(
+            &plugin,
+            &injector,
+            &tool_provider,
+            &agent_registry,
+            method,
+            params,
+        )
     });
 }
 
@@ -157,12 +164,9 @@ fn dispatch_combined(
             serde_json::to_value(agents).map_err(|e| DispatchError::Internal(e.to_string()))
         }
         "agent-definition.get-agent" => {
-            let name = params
-                .get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    DispatchError::InvalidParams("'name' parameter required".to_string())
-                })?;
+            let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                DispatchError::InvalidParams("'name' parameter required".to_string())
+            })?;
             let workspace = params
                 .get("workspace")
                 .and_then(|v| v.as_str())
