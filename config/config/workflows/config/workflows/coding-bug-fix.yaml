@@ -1,0 +1,127 @@
+name: coding-bug-fix
+version: 1
+description: "Bug fix workflow: analyze root cause → implement fix → edge-case review → commit"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-git-ops
+  - plugin: plugin-memory
+    optional: true
+steps:
+  # Step 0 (optional): Query knowledge graph for bug context
+  - id: memory_context
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "query", "{{input}}"]
+      timeout_seconds: 60
+
+  # Step 1: Architect analyzes the bug (with graph context)
+  - id: analyze_bug
+    type: agent
+    depends_on: [memory_context]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/architect. Analyze this bug report and identify:
+        1. Root cause (not just symptoms)
+        2. Affected components and blast radius
+        3. Recommended fix strategy with minimal risk
+        Use knowledge graph context (if available) to understand call chains and impact scope.
+      user_prompt_template: "Analyze bug: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_context]
+      timeout_seconds: 300
+
+  # Step 2: Implement the fix
+  - id: implement_fix
+    type: agent
+    depends_on: [analyze_bug]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are a senior developer fixing a bug.
+        Fix the root cause, not just symptoms. Add regression tests to prevent recurrence.
+      user_prompt_template: "Fix the bug based on root cause analysis: {{input}}"
+      max_tokens: 4096
+      context_from: [analyze_bug]
+      timeout_seconds: 600
+      retry:
+        max_attempts: 2
+        on_failure_of: run_tests
+
+  # Step 2b: Run tests
+  - id: run_tests
+    type: function
+    depends_on: [implement_fix]
+    config:
+      command: ["bash", "-c", "cargo test 2>&1 || npm test 2>&1 || echo 'no test runner found'"]
+      timeout_seconds: 120
+
+  # Step 3: QA edge case review
+  - id: edge_case_review
+    type: agent
+    depends_on: [run_tests]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa. Hunt for unhandled edge cases and verify the fix is complete.
+        Check boundary conditions, error paths, and concurrent access scenarios.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Review this bug fix for completeness and edge cases"
+      max_tokens: 4096
+      context_from: [implement_fix]
+      timeout_seconds: 300
+
+  # Step 4: Detect changes & risk assessment
+  - id: memory_detect_changes
+    type: function
+    depends_on: [edge_case_review]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "detect-changes"]
+      timeout_seconds: 60
+
+  # Step 5: Commit the fix
+  - id: git_commit
+    type: function
+    depends_on: [memory_detect_changes]
+    executor: git-ops
+    config:
+      command: ["bash", "-c", "git add -A && git commit -m \"fix: {{input}}\""]
+
+  # Step 6: Re-index after commit
+  - id: memory_reindex
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "reindex", "."]
+      timeout_seconds: 120
+
+  # Step 7: Push branch to remote
+  - id: git_push
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-git-ops
+    config:
+      command: ["plugin-git-pr", "push"]
+      timeout_seconds: 30
+
+  # Step 8: Create pull request
+  - id: create_pr
+    type: function
+    depends_on: [git_push]
+    executor: plugin-git-ops
+    optional: true
+    config:
+      command: ["plugin-git-pr", "create-pr", "fix: {{input}}"]
+      timeout_seconds: 30

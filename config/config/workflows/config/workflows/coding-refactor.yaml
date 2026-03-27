@@ -1,0 +1,98 @@
+name: coding-refactor
+version: 1
+description: "Safe refactoring: architect plans → dev executes → QA validates no regressions"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-git-ops
+  - plugin: plugin-memory
+    optional: true
+steps:
+  # Step 0 (optional): Impact analysis via knowledge graph
+  - id: memory_impact
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "query", "{{input}}"]
+      timeout_seconds: 60
+
+  # Step 1: Architect plans the refactor (with impact context)
+  - id: plan_refactor
+    type: agent
+    depends_on: [memory_impact]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/architect. Plan a safe refactoring strategy:
+        1. Identify all affected modules and dependencies
+        2. Define incremental migration steps (each must leave code in a working state)
+        3. List risks and rollback strategies
+        Use knowledge graph impact analysis (if available) to understand blast radius.
+      user_prompt_template: "Plan safe refactoring for: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_impact]
+      timeout_seconds: 300
+
+  # Step 2: Execute refactoring
+  - id: execute_refactor
+    type: agent
+    depends_on: [plan_refactor]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are a senior developer executing a planned refactoring.
+        Follow the plan step by step. Ensure all existing tests pass after each change.
+        Make incremental, reviewable changes.
+      user_prompt_template: "Execute refactoring plan: {{input}}"
+      max_tokens: 8192
+      context_from: [plan_refactor]
+      timeout_seconds: 600
+
+  # Step 3: QA validates no regressions
+  - id: regression_check
+    type: agent
+    depends_on: [execute_refactor]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa. Verify this refactoring introduces no behavioral regressions.
+        Compare before/after interfaces, check all callers are updated, verify test coverage.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Verify no regressions in refactoring"
+      max_tokens: 4096
+      context_from: [execute_refactor]
+      timeout_seconds: 300
+
+  # Step 4: Detect changes & risk assessment
+  - id: memory_detect_changes
+    type: function
+    depends_on: [regression_check]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "detect-changes"]
+      timeout_seconds: 60
+
+  # Step 5: Commit
+  - id: git_commit
+    type: function
+    depends_on: [memory_detect_changes]
+    executor: git-ops
+    config:
+      command: ["bash", "-c", "git add -A && git commit -m \"refactor: {{input}}\""]
+
+  # Step 6: Re-index after commit
+  - id: memory_reindex
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "reindex", "."]
+      timeout_seconds: 120

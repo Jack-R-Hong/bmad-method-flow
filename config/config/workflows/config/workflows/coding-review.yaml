@@ -1,0 +1,71 @@
+name: coding-review
+version: 1
+description: "Multi-layer code review: adversarial + edge-case analysis in parallel, then synthesis"
+requires:
+  - plugin: bmad-method
+  - plugin: plugin-memory
+    optional: true
+steps:
+  # Step 0 (optional): Knowledge graph context for review
+  - id: memory_context
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "query", "{{input}}"]
+      timeout_seconds: 60
+
+  # Parallel review layer 1: Adversarial review
+  - id: adversarial_review
+    type: agent
+    depends_on: [memory_context]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/architect performing adversarial code review.
+        Look for security vulnerabilities, performance bottlenecks, design flaws,
+        and violations of SOLID principles. Be thorough and critical.
+        Use knowledge graph context (if available) to understand call chains and dependencies.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Perform critical adversarial review of: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_context]
+      timeout_seconds: 300
+
+  # Parallel review layer 2: Edge case hunting
+  - id: edge_case_review
+    type: agent
+    depends_on: [memory_context]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa performing edge case analysis.
+        Walk every branching path and boundary condition. Report only unhandled edge cases.
+        Check: null/empty inputs, integer overflow, concurrency, resource exhaustion.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Hunt for unhandled edge cases in: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_context]
+      timeout_seconds: 300
+
+  # Synthesize findings from both parallel reviews
+  - id: review_synthesis
+    type: agent
+    depends_on: [adversarial_review, edge_case_review]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/sm. Synthesize code review findings into a single prioritized report.
+        Categorize by severity (critical/high/medium/low) and provide actionable fix suggestions.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Synthesize review findings into a prioritized action list"
+      max_tokens: 4096
+      context_from: [adversarial_review, edge_case_review]
+      timeout_seconds: 300

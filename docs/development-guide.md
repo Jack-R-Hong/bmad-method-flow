@@ -1,5 +1,7 @@
 # plugin-coding-pack — Development Guide
 
+> Generated: 2026-03-27 | Scan Level: quick | Mode: full_rescan
+
 ## Prerequisites
 
 | Requirement | Version | Purpose |
@@ -18,7 +20,7 @@
 ```bash
 export PULSE_DB_PATH=sqlite:pulse.db?mode=rwc   # Required: SQLite connection
 export PULSE_LLM_PROVIDER=anthropic              # Optional: LLM provider
-export PULSE_LLM_MODEL=claude-sonnet-4-6            # Optional: Model override
+export PULSE_LLM_MODEL=claude-sonnet-4-6         # Optional: Model override
 ```
 
 ### Initial Setup
@@ -52,7 +54,7 @@ PULSE_DB_PATH=sqlite:pulse.db?mode=rwc \
 |---------|---------|
 | `cargo build` | Debug build |
 | `cargo build --release` | Release build |
-| `cargo test` | Run all 16 unit tests |
+| `cargo test` | Run all 210 tests |
 | `./install.sh` | Full build + install all plugin binaries |
 | `./install.sh --skip-build` | Install without rebuilding |
 | `./uninstall.sh` | Remove installed binaries |
@@ -85,6 +87,10 @@ pulse run coding-refactor --config ./config \
 # Code review (3 steps)
 pulse run coding-review --config ./config \
   -i '{"target": "src/auth/"}'
+
+# Parallel multi-reviewer code review
+pulse run coding-parallel-review --config ./config \
+  -i '{"target": "src/"}'
 ```
 
 ## Plugin Management
@@ -101,6 +107,35 @@ pulse exec plugin-coding-pack -i '{"action": "list-workflows"}'
 
 # List installed plugins
 pulse exec plugin-coding-pack -i '{"action": "list-plugins"}'
+```
+
+## Board Operations
+
+```bash
+# Get Kanban board data
+pulse exec plugin-coding-pack -i '{"action": "board-data"}'
+
+# List all epics
+pulse exec plugin-coding-pack -i '{"action": "board-epics-list"}'
+
+# Get epic detail
+pulse exec plugin-coding-pack -i '{"action": "board-epics/{id}"}'
+
+# Create a new epic
+pulse exec plugin-coding-pack -i '{"action": "board-create-epic", "title": "...", "description": "..."}'
+
+# Create a story under an epic
+pulse exec plugin-coding-pack -i '{"action": "board-create-story", "epic_id": "...", "title": "..."}'
+```
+
+## Tool Provider
+
+```bash
+# List available MCP-style tools
+pulse exec plugin-coding-pack -i '{"action": "list-tools"}'
+
+# Invoke a tool
+pulse exec plugin-coding-pack -i '{"action": "invoke-tool", "tool": "...", "params": {...}}'
 ```
 
 ## Bootstrap (Self-Evolution) Workflows
@@ -120,10 +155,10 @@ pulse run bootstrap-cycle --config ./config \
 
 ## Testing
 
-### Unit Tests
+### Running Tests
 
 ```bash
-# Run all tests (16 tests)
+# Run all tests (210 tests)
 cargo test
 
 # Run with output
@@ -131,29 +166,58 @@ cargo test -- --nocapture
 
 # Run specific test
 cargo test plugin_health_check_returns_true
+
+# Run only unit tests (fast)
+cargo test --lib
+
+# Run only integration tests
+cargo test --test registration_tests
+cargo test --test e2e_tests
+cargo test --test e2e_executor_tests
 ```
 
 ### Test Coverage
 
-Tests in `src/lib.rs` cover:
-- Plugin lifecycle (health check, info, dependencies)
-- Action dispatch (validate-pack, list-workflows, list-plugins)
-- Error handling (unknown action, missing input)
-- Capability probe
-- Dashboard JSON validity (pages, API routes, display customizations)
+**Rust tests** cover:
+- **Unit tests** (`src/lib.rs`) — Plugin lifecycle, action dispatch, dashboard JSON validity, capability probe
+- **Registration tests** (`tests/registration_tests.rs`) — Plugin registration, action routing, board actions, tool provider
+- **E2E tests** (`tests/e2e_tests.rs`) — End-to-end plugin integration
+- **Executor E2E tests** (`tests/e2e_executor_tests.rs`) — Workflow execution with retry loops, parallel steps, quality gates, context propagation, template variables, working directories, PR extraction
 
-Dashboard tests in `dashboard/tests/`:
-- `coding-pack.test.ts` — Pack-level tests
-- `execute-workflow.test.ts` — Workflow execution tests
+**Dashboard TypeScript tests** (`dashboard/tests/`):
+- `coding-pack.test.ts` — Pack overview page validation
+- `execute-workflow.test.ts` — Workflow execution form tests
+- `scrum-board.test.ts` — Scrum board rendering
+- `scrum-board-detail.test.ts` — Card detail popup
+- `scrum-board-filters.test.ts` — Board filtering
+- `atdd-scrum-board.test.ts` — Acceptance-driven board tests
+- `board-tools-e2e.test.ts` — Board tools end-to-end tests
+
+### Test Fixtures
+
+Located in `tests/fixtures/`:
+- `mock-plugins/` — Mock plugin executables (bmad-method, provider-claude-code, mock-slow-cmd, mock-test-runner)
+- `sample-project/` — Minimal Rust project for testing workspace detection
+- `workflows/` — 15 test workflow YAML definitions covering various execution patterns
 
 ## Project Structure Quick Reference
 
 ```
-src/lib.rs          — Main plugin logic + 16 unit tests
-src/main.rs         — CLI entry point
-src/pack.rs         — Action dispatch and pack validation
-src/validator.rs    — Workflow/plugin validation
-src/util.rs         — Utility functions
-config/config.yaml  — Runtime configuration
+src/lib.rs              — Main plugin logic, trait impls
+src/main.rs             — CLI entry point
+src/executor.rs         — Workflow execution engine (DAG dispatch)
+src/board.rs            — Scrum board actions
+src/board_store.rs      — Board JSON persistence
+src/tool_provider.rs    — MCP-style tool provisioning
+src/pack.rs             — Pack management and validation
+src/config_injector.rs  — Provider config injection
+src/workspace.rs        — Workspace detection
+src/agent_registry.rs   — Agent definition discovery
+src/test_parser.rs      — Test result parsing
+src/validator.rs        — Workflow/plugin validation
+src/util.rs             — Utility functions
+config/config.yaml      — Runtime configuration
+config/workflows/       — Workflow YAML definitions (11 files)
 plugin-packs/coding.toml — Pack manifest
+dashboard/manifest.json — Dashboard page definitions (11 pages)
 ```

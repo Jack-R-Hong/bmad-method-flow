@@ -1,0 +1,159 @@
+name: coding-story-dev
+version: 1
+description: "BMAD story-driven dev: SM prepares story → architect designs → dev implements → QA reviews"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-git-ops
+  - plugin: plugin-git-worktree
+  - plugin: plugin-memory
+    optional: true
+steps:
+  # Step 0 (optional): Query knowledge graph for story context
+  - id: memory_context
+    type: function
+    depends_on: []
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "query", "{{input}}"]
+      timeout_seconds: 60
+
+  # Step 1: Scrum Master prepares the story
+  - id: prepare_story
+    type: agent
+    depends_on: [memory_context]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/sm. Prepare a detailed story specification with:
+        - Clear user story format (As a... I want... So that...)
+        - Acceptance criteria (Given/When/Then)
+        - Technical notes and constraints
+        - Definition of Done checklist
+        Also generate a short kebab-case branch name (e.g. "user-profile-edit")
+        and include it in your output as: branch_name: <name>
+      user_prompt_template: "Prepare story spec from: {{input}}"
+      max_tokens: 4096
+      context_from: [memory_context]
+      timeout_seconds: 300
+
+  # Step 2: Architect creates technical design
+  - id: technical_design
+    type: agent
+    depends_on: [prepare_story]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/architect. Create a technical design for the story:
+        - Component diagram and data flow
+        - API contracts (if applicable)
+        - Database changes (if applicable)
+        - Test strategy
+      user_prompt_template: "Create technical design for this story"
+      max_tokens: 4096
+      context_from: [prepare_story]
+      timeout_seconds: 300
+
+  # Step 3: Create worktree
+  - id: create_worktree
+    type: function
+    depends_on: [technical_design]
+    executor: plugin-git-worktree
+    config:
+      command: ["git", "worktree", "add", "-b", "story/{{branch_name}}", "../worktree-{{branch_name}}"]
+
+  # Step 4: Developer implements with TDD (in worktree)
+  - id: implement
+    type: agent
+    depends_on: [create_worktree]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      working_dir: "{{working_dir}}"
+      system_prompt: |
+        You are a senior developer implementing a user story with TDD.
+        Write tests first based on acceptance criteria, then implement to make them pass.
+      user_prompt_template: "Implement story with TDD: {{input}}"
+      max_tokens: 8192
+      context_from: [prepare_story, technical_design]
+      timeout_seconds: 600
+      retry:
+        max_attempts: 3
+        on_failure_of: run_tests
+
+  # Step 4b: Run tests (in worktree)
+  - id: run_tests
+    type: function
+    depends_on: [implement]
+    config:
+      working_dir: "{{working_dir}}"
+      command: ["bash", "-c", "cargo test 2>&1 || npm test 2>&1 || echo 'no test runner found'"]
+      timeout_seconds: 120
+
+  # Step 5: QA review against acceptance criteria
+  - id: qa_review
+    type: agent
+    depends_on: [run_tests]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa. Review the implementation against acceptance criteria.
+        Verify every AC is covered by tests. Report any gaps or issues.
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Review implementation against acceptance criteria"
+      max_tokens: 4096
+      context_from: [prepare_story, implement]
+      timeout_seconds: 300
+
+  # Step 6: Detect changes & risk assessment (in worktree)
+  - id: memory_detect_changes
+    type: function
+    depends_on: [qa_review]
+    executor: plugin-memory
+    optional: true
+    config:
+      working_dir: "{{working_dir}}"
+      command: ["plugin-memory", "detect-changes"]
+      timeout_seconds: 60
+
+  # Step 7: Commit (in worktree)
+  - id: git_commit
+    type: function
+    depends_on: [memory_detect_changes]
+    config:
+      working_dir: "{{working_dir}}"
+      command: ["bash", "-c", "git add -A && git commit -m \"feat: {{input}}\""]
+
+  # Step 8: Re-index after commit
+  - id: memory_reindex
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-memory
+    optional: true
+    config:
+      command: ["plugin-memory", "reindex", "."]
+      timeout_seconds: 120
+
+  # Step 9: Push branch to remote
+  - id: git_push
+    type: function
+    depends_on: [git_commit]
+    executor: plugin-git-ops
+    config:
+      command: ["plugin-git-pr", "push"]
+      timeout_seconds: 30
+
+  # Step 10: Create pull request
+  - id: create_pr
+    type: function
+    depends_on: [git_push]
+    executor: plugin-git-ops
+    optional: true
+    config:
+      command: ["plugin-git-pr", "create-pr", "feat: {{input}}"]
+      timeout_seconds: 30

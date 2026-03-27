@@ -1,0 +1,81 @@
+name: bootstrap-plugin
+version: 1
+description: "Self-bootstrap: use installed plugins to develop any plugin in pulse-plugins"
+requires:
+  - plugin: provider-claude-code
+  - plugin: bmad-method
+  - plugin: plugin-git-ops
+steps:
+  # Step 1: Architect analyzes current plugin state and plans changes
+  - id: architect_plan
+    type: agent
+    depends_on: []
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/architect. You are developing a Pulse plugin (Rust, WASM-compatible).
+        Analyze the current plugin codebase and the requested change.
+        Produce a technical plan covering:
+        - Files to modify/create
+        - API surface changes (if any)
+        - Impact on existing tests
+        - Build verification steps (cargo test, cargo clippy)
+      user_prompt_template: "Plan plugin change: {{input}}"
+      max_tokens: 4096
+      timeout_seconds: 300
+
+  # Step 2: Implement the change via Claude Code
+  - id: implement
+    type: agent
+    depends_on: [architect_plan]
+    executor: provider-claude-code
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are a senior Rust developer working on a Pulse plugin.
+        Follow the architect's plan. Key constraints:
+        - Plugin must compile for both native and wasm32 targets
+        - Use pulse-plugin-sdk traits (PluginLifecycle, StepExecutorPlugin)
+        - All tests must pass: cargo test
+        - Run cargo clippy with no warnings
+      user_prompt_template: "Implement plugin change: {{input}}"
+      max_tokens: 8192
+      context_from: [architect_plan]
+      timeout_seconds: 600
+
+  # Step 3: Build verification
+  - id: build_verify
+    type: function
+    depends_on: [implement]
+    config:
+      command: ["cargo", "test"]
+      timeout_seconds: 300
+
+  # Step 4: QA review the plugin change
+  - id: qa_review
+    type: agent
+    depends_on: [build_verify]
+    executor: bmad-method
+    config:
+      model_tier: balanced
+      system_prompt: |
+        You are bmad/qa reviewing a Pulse plugin change.
+        Check for:
+        - WASM compatibility (no std::fs, no tokio in wasm32 path)
+        - Plugin SDK trait compliance
+        - Error handling completeness
+        - Test coverage of new code paths
+        End your review with a verdict line in exactly this format:
+        verdict: approve OR verdict: request-changes OR verdict: reject
+      user_prompt_template: "Review plugin change for quality and WASM compatibility"
+      max_tokens: 4096
+      context_from: [implement]
+      timeout_seconds: 300
+
+  # Step 5: Git stage changes
+  - id: git_commit
+    type: function
+    depends_on: [qa_review]
+    config:
+      command: ["bash", "-c", "git add -A && git commit -m \"chore: {{input}}\""]

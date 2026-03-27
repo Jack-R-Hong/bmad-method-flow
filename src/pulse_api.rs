@@ -256,12 +256,135 @@ pub fn get_board_data() -> Result<serde_json::Value, WitPluginError> {
     }))
 }
 
-/// Get assignment detail for modal display.
+/// Get assignment detail for modal display, including LLM execution events.
 pub fn get_assignment_detail(task_id: &str) -> Result<serde_json::Value, WitPluginError> {
     let task = get_task(task_id)?;
     let meta = get_meta(&task);
     let total = meta.subtasks.len();
     let done = meta.subtasks.iter().filter(|s| s.done).count();
+
+    // Fetch full task detail with events for LLM records
+    let detail_url = format!("{}/tasks/{}", api_base(), task_id);
+    let events = reqwest::blocking::get(&detail_url)
+        .ok()
+        .and_then(|r| r.text().ok())
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+        .and_then(|v| v.get("events").cloned())
+        .and_then(|e| e.as_array().cloned())
+        .unwrap_or_default();
+
+    // Extract LLM execution records from events
+    let mut llm_records: Vec<serde_json::Value> = Vec::new();
+    for event in &events {
+        if let Some(completed) = event.get("Completed") {
+            if let Some(output) = completed.get("output") {
+                let content = output.get("content").and_then(|c| c.get("content"));
+                let step_id = output
+                    .get("content")
+                    .and_then(|c| c.get("step_id"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let executor = output
+                    .get("content")
+                    .and_then(|c| c.get("executor"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let status = output
+                    .get("content")
+                    .and_then(|c| c.get("status"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let exec_time = output
+                    .get("content")
+                    .and_then(|c| c.get("execution_time_ms"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                // Parse the inner content JSON (LLM response)
+                let llm_data = content
+                    .and_then(|c| c.as_str())
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
+                let result_text = llm_data
+                    .as_ref()
+                    .and_then(|d| d.get("result"))
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("");
+                let session_id = llm_data
+                    .as_ref()
+                    .and_then(|d| d.get("session_id"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let cost_usd = llm_data
+                    .as_ref()
+                    .and_then(|d| d.get("total_cost_usd"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let input_tokens = llm_data
+                    .as_ref()
+                    .and_then(|d| d.get("input_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let output_tokens = llm_data
+                    .as_ref()
+                    .and_then(|d| d.get("output_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                let timestamp = completed
+                    .get("completed_at")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+
+                llm_records.push(serde_json::json!({
+                    "step_id": step_id,
+                    "executor": executor,
+                    "status": status,
+                    "execution_time_ms": exec_time,
+                    "result": result_text,
+                    "session_id": session_id,
+                    "cost_usd": cost_usd,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "timestamp": timestamp,
+                }));
+            }
+        }
+    }
+
+    // Merge LLM records into comments (as system-generated entries)
+    let mut all_comments: Vec<serde_json::Value> = meta
+        .comments
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "author": c.author,
+                "content": c.content,
+                "timestamp": c.timestamp,
+            })
+        })
+        .collect();
+
+    for (i, rec) in llm_records.iter().enumerate() {
+        let cost_str = if rec["cost_usd"].as_f64().unwrap_or(0.0) > 0.0 {
+            format!(
+                " | ${:.4} ({} in / {} out tokens)",
+                rec["cost_usd"].as_f64().unwrap_or(0.0),
+                rec["input_tokens"],
+                rec["output_tokens"]
+            )
+        } else {
+            String::new()
+        };
+
+        all_comments.push(serde_json::json!({
+            "id": format!("llm-{}", i + 1),
+            "author": format!("{} ({})", rec["executor"].as_str().unwrap_or("llm"), rec["step_id"].as_str().unwrap_or("")),
+            "content": format!("{}\n\n⏱ {}ms{}", rec["result"].as_str().unwrap_or(""), rec["execution_time_ms"], cost_str),
+            "timestamp": rec["timestamp"].as_str().unwrap_or(""),
+        }));
+    }
 
     Ok(serde_json::json!({
         "id": task.id,
@@ -280,12 +403,9 @@ pub fn get_assignment_detail(task_id: &str) -> Result<serde_json::Value, WitPlug
             "title": s.title,
             "done": s.done,
         })).collect::<Vec<_>>(),
-        "comments": meta.comments.iter().map(|c| serde_json::json!({
-            "id": c.id,
-            "author": c.author,
-            "content": c.content,
-            "timestamp": c.timestamp,
-        })).collect::<Vec<_>>(),
+        "comments": all_comments,
+        "llm_records": llm_records,
+        "timeline": events,
     }))
 }
 

@@ -1,6 +1,6 @@
 # plugin-coding-pack — Documentation Index
 
-> Generated: 2026-03-21 | Scan: quick | Mode: initial_scan
+> Generated: 2026-03-27 | Scan: quick | Mode: full_rescan
 
 ## Project Overview
 
@@ -11,17 +11,20 @@
 
 ## Quick Reference
 
-- **Tech Stack:** Rust + pulse-plugin-sdk + serde + wit-bindgen (WASM) + tracing + SQLite
+- **Tech Stack:** Rust + pulse-plugin-sdk + serde + wit-bindgen (WASM) + tracing + reqwest + tokio + SQLite
 - **Entry Points:** `src/lib.rs` (library), `src/main.rs` (binary)
-- **Architecture Pattern:** Plugin orchestrator — coordinates 5 sibling plugins through 9 workflow pipelines
+- **Architecture Pattern:** Plugin orchestrator — coordinates 7 plugins through 11 workflow pipelines
+- **Source Modules:** 13 Rust modules (~315K source)
+- **Tests:** 210 (Rust unit/integration/E2E + TypeScript dashboard tests)
+- **Dashboard:** 11 pages (Kanban board, epics, workflows, agents, execution, logs)
 - **BMAD Agents:** 9 AI team members (Architect, Developer, PM, QA, SM, Quick Dev, Analyst, UX Designer, Tech Writer)
 
 ## Generated Documentation
 
-- [Project Overview](./project-overview.md) — Executive summary, tech stack, coordinated plugins, workflow categories, AI team roster
-- [Architecture](./architecture.md) — Plugin traits, action dispatch, dashboard extension, workflow system, configuration, dependencies, testing strategy
+- [Project Overview](./project-overview.md) — Executive summary, tech stack, coordinated plugins, workflow categories, dashboard pages, AI team roster
+- [Architecture](./architecture.md) — Plugin traits, action dispatch (30+ actions), workflow engine, board system, tool provider, config injection, dependencies, testing strategy
 - [Source Tree Analysis](./source-tree-analysis.md) — Annotated directory structure, critical folders, entry points, key configuration files
-- [Development Guide](./development-guide.md) — Prerequisites, environment setup, build commands, workflow execution, plugin management, testing
+- [Development Guide](./development-guide.md) — Prerequisites, environment setup, build commands, workflow execution, board operations, tool provider, plugin management, testing
 - [Technical Reference](./plugin-coding-pack.md) — Detailed technical documentation of the plugin internals
 
 ## Existing Documentation
@@ -44,4 +47,7 @@ pulse registry validate --config ./config
 # 5. Run a workflow
 pulse run coding-quick-dev --config ./config \
   -i '{"input": "your task description"}'
+
+# 6. Check board status
+pulse exec plugin-coding-pack -i '{"action": "board-data"}'
 ```

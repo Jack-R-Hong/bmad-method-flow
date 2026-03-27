@@ -16,6 +16,9 @@ config/plugins/
 .DS_Store
 Thumbs.db
 
+# Node
+node_modules/
+
 # Output artifacts (generated)
 _bmad-output/
 
