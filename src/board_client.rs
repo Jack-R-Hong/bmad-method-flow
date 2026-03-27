@@ -18,22 +18,26 @@ fn api_err(msg: impl std::fmt::Display) -> WitPluginError {
 
 // ── Types ────────────────────────────────────────────────────────────────
 
+fn nullable_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(d).map(|o| o.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Assignment {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     pub status: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     pub description: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     pub priority: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     pub assignee: String,
     #[serde(default)]
     pub labels: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     pub workflow_id: String,
 }
 
@@ -52,8 +56,20 @@ pub fn is_available() -> bool {
 }
 
 /// List assignments from the board plugin, optionally filtered by status.
+/// Fetches all tasks across all workspaces (no workspace filter).
 pub fn list_assignments(status_filter: Option<&str>) -> Result<Vec<Assignment>, WitPluginError> {
-    let url = board_api("board/data");
+    list_assignments_in_workspace(status_filter, None)
+}
+
+/// List assignments from the board plugin for a specific workspace.
+pub fn list_assignments_in_workspace(
+    status_filter: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<Vec<Assignment>, WitPluginError> {
+    let mut url = board_api("board/data");
+    if let Some(ws) = workspace {
+        url.push_str(&format!("?workspace={}", ws));
+    }
     let body = reqwest::blocking::get(&url)
         .map_err(|e| api_err(format!("GET {url}: {e}")))?
         .text()
