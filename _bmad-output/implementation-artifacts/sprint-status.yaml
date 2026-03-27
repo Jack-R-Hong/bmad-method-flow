@@ -211,32 +211,32 @@ development_status:
   # Epic 22: GitHub Issue-Driven Task Intake
   epic-22: in-progress
   22-1-implement-github-rest-api-client-for-issue-operations: ready-for-dev
-  22-2-sync-github-issues-to-plugin-board-as-tasks: backlog
-  22-3-filter-issues-by-label-and-milestone-for-selective-sync: backlog
-  22-4-auto-link-prs-to-source-github-issues: backlog
+  22-2-sync-github-issues-to-plugin-board-as-tasks: ready-for-dev
+  22-3-filter-issues-by-label-and-milestone-for-selective-sync: ready-for-dev
+  22-4-auto-link-prs-to-source-github-issues: ready-for-dev
   epic-22-retrospective: optional
 
   # Epic 23: PR Review Feedback Loop
-  epic-23: backlog
-  23-1-monitor-pr-review-status-via-github-api: backlog
-  23-2-parse-review-comments-into-actionable-fix-descriptions: backlog
-  23-3-create-coding-pr-fix-workflow-template: backlog
-  23-4-integrate-pr-feedback-loop-into-auto-dev-cycle: backlog
+  epic-23: in-progress
+  23-1-monitor-pr-review-status-via-github-api: ready-for-dev
+  23-2-parse-review-comments-into-actionable-fix-descriptions: ready-for-dev
+  23-3-create-coding-pr-fix-workflow-template: ready-for-dev
+  23-4-integrate-pr-feedback-loop-into-auto-dev-cycle: ready-for-dev
   epic-23-retrospective: optional
 
   # Epic 24: Worktree Lifecycle Management
-  epic-24: backlog
-  24-1-implement-worktree-ownership-tracking: backlog
-  24-2-auto-cleanup-worktrees-on-completion-and-merge: backlog
-  24-3-recover-orphaned-worktrees-and-report-status: backlog
+  epic-24: in-progress
+  24-1-implement-worktree-ownership-tracking: ready-for-dev
+  24-2-auto-cleanup-worktrees-on-completion-and-merge: ready-for-dev
+  24-3-recover-orphaned-worktrees-and-report-status: ready-for-dev
   epic-24-retrospective: optional
 
   # Epic 25: Agent Mesh Safety Guards
-  epic-25: backlog
-  25-1-add-agentmeshsettings-to-workspace-configuration: backlog
-  25-2-implement-depth-guard-check-in-executor: backlog
-  25-3-inject-agent-mesh-config-into-json-rpc-parameters: backlog
-  25-4-define-acl-rules-in-agent-registry: backlog
-  25-5-implement-generate-agents-yaml-pack-action: backlog
-  25-6-refactor-list-agents-action-to-use-registry: backlog
+  epic-25: in-progress
+  25-1-add-agentmeshsettings-to-workspace-configuration: ready-for-dev
+  25-2-implement-depth-guard-check-in-executor: ready-for-dev
+  25-3-inject-agent-mesh-config-into-json-rpc-parameters: ready-for-dev
+  25-4-define-acl-rules-in-agent-registry: ready-for-dev
+  25-5-implement-generate-agents-yaml-pack-action: ready-for-dev
+  25-6-refactor-list-agents-action-to-use-registry: ready-for-dev
   epic-25-retrospective: optional
