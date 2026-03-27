@@ -1,6 +1,6 @@
 # Story 22.2: Sync GitHub Issues to plugin-board as Tasks
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -20,46 +20,46 @@ So that issues become the task source for auto-dev without manual board task cre
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `src/github_sync.rs` module with result types (AC: 1, 3)
-  - [ ] 1.1 Create new file `src/github_sync.rs`
-  - [ ] 1.2 Define `SyncResult` struct with `Serialize`: `created: u32`, `updated: u32`, `skipped: u32`, `closed: u32`
-  - [ ] 1.3 Define `SyncedTask` struct (internal): `task_id: String`, `issue_number: u64`, `action: String` (created/updated/skipped/closed)
-  - [ ] 1.4 Add `#[cfg(not(target_arch = "wasm32"))] pub mod github_sync;` to `src/lib.rs` (after `github_client` declaration)
+- [x] Task 1: Create `src/github_sync.rs` module with result types (AC: 1, 3)
+  - [x] 1.1 Create new file `src/github_sync.rs`
+  - [x] 1.2 Define `SyncResult` struct with `Serialize`: `created: u32`, `updated: u32`, `skipped: u32`, `closed: u32`
+  - [x] 1.3 Define `SyncedTask` struct (internal) -- removed as unused, not needed for the sync logic
+  - [x] 1.4 Add `#[cfg(not(target_arch = "wasm32"))] pub mod github_sync;` to `src/lib.rs` (after `github_client` declaration)
 
-- [ ] Task 2: Implement board task creation via Pulse API (AC: 1)
-  - [ ] 2.1 Add `create_task()` function to `src/board_client.rs` that POSTs to `http://127.0.0.1:{port}/api/v1/tasks` with JSON body `{ title, description, status, metadata }`, returns the new task ID
-  - [ ] 2.2 The POST body must include: `"title"`, `"description"`, `"status": "ready-for-dev"`, `"metadata": { "issue_number": N, "issue_url": "...", "labels": [...], "milestone": "..." }`
-  - [ ] 2.3 Parse the response to extract the created task's `id` field, return `Result<String, WitPluginError>`
-  - [ ] 2.4 Follow the existing `board_client.rs` error pattern: `api_err(format!("POST {url}: {e}"))`
+- [x] Task 2: Implement board task creation via Pulse API (AC: 1)
+  - [x] 2.1 Add `create_task()` function to `src/board_client.rs` that POSTs to `http://127.0.0.1:{port}/api/v1/tasks` with JSON body `{ title, description, status, metadata }`, returns the new task ID
+  - [x] 2.2 The POST body must include: `"title"`, `"description"`, `"status": "ready-for-dev"`, `"metadata": { "issue_number": N, "issue_url": "...", "labels": [...], "milestone": "..." }`
+  - [x] 2.3 Parse the response to extract the created task's `id` field, return `Result<String, WitPluginError>`
+  - [x] 2.4 Follow the existing `board_client.rs` error pattern: `api_err(format!("POST {url}: {e}"))`
 
-- [ ] Task 3: Implement board task lookup by issue_number (AC: 2)
-  - [ ] 3.1 Add `find_task_by_issue_number()` function to `src/board_client.rs` that lists all tasks and finds one whose metadata contains a matching `issue_number`
-  - [ ] 3.2 Fetch full task details including metadata via `GET /api/v1/tasks/{id}` for each candidate, or use the board data endpoint that returns metadata
-  - [ ] 3.3 Return `Result<Option<(String, String)>, WitPluginError>` where tuple is `(task_id, current_status)`
+- [x] Task 3: Implement board task lookup by issue_number (AC: 2)
+  - [x] 3.1 Add `find_task_by_issue_number()` function to `src/board_client.rs` that lists all tasks and finds one whose metadata contains a matching `issue_number`
+  - [x] 3.2 Fetch full task details including metadata via `GET /api/v1/tasks/{id}` for each candidate, or use the board data endpoint that returns metadata
+  - [x] 3.3 Return `Result<Option<(String, String)>, WitPluginError>` where tuple is `(task_id, current_status)`
 
-- [ ] Task 4: Implement `sync_issues_to_board()` core logic (AC: 1, 2, 3)
-  - [ ] 4.1 Create `pub fn sync_issues_to_board(config: &WorkspaceConfig) -> Result<SyncResult, WitPluginError>`
-  - [ ] 4.2 Instantiate `GitHubClient::new()` and call `list_issues("open", None, None)` to get all open issues
-  - [ ] 4.3 Also call `list_issues("closed", None, None)` to detect recently closed issues for status sync
-  - [ ] 4.4 For each open issue: call `find_task_by_issue_number(issue.number)` to check for existing task
-  - [ ] 4.5 If no existing task: call `create_task()` with title, body, metadata, status `ready-for-dev` -> increment `created`
-  - [ ] 4.6 If existing task found: call `update_assignment(task_id, payload)` to update title/body -> increment `updated`
-  - [ ] 4.7 For each closed issue that has a board task not already in `done` status: update status to `done` -> increment `closed`
-  - [ ] 4.8 Issues with no changes needed: increment `skipped`
-  - [ ] 4.9 Return `SyncResult` with all counts
-  - [ ] 4.10 Add `tracing::info!` logs for each action: created, updated, closed, with issue number
+- [x] Task 4: Implement `sync_issues_to_board()` core logic (AC: 1, 2, 3)
+  - [x] 4.1 Create `pub fn sync_issues_to_board(config: &WorkspaceConfig) -> Result<SyncResult, WitPluginError>`
+  - [x] 4.2 Instantiate `GitHubClient::new()` and call `list_issues("open", None, None)` to get all open issues
+  - [x] 4.3 Also call `list_issues("closed", None, None)` to detect recently closed issues for status sync
+  - [x] 4.4 For each open issue: call `find_task_by_issue_number(issue.number)` to check for existing task
+  - [x] 4.5 If no existing task: call `create_task()` with title, body, metadata, status `ready-for-dev` -> increment `created`
+  - [x] 4.6 If existing task found: call `update_assignment(task_id, payload)` to update title/body -> increment `updated`
+  - [x] 4.7 For each closed issue that has a board task not already in `done` status: update status to `done` -> increment `closed`
+  - [x] 4.8 Issues with no changes needed: increment `skipped`
+  - [x] 4.9 Return `SyncResult` with all counts
+  - [x] 4.10 Add `tracing::info!` logs for each action: created, updated, closed, with issue number
 
-- [ ] Task 5: Wire `sync-github-issues` action into `execute_action()` (AC: 4)
-  - [ ] 5.1 In `src/pack.rs`, add match arm `"sync-github-issues"` that calls `crate::github_sync::sync_issues_to_board(&config)`
-  - [ ] 5.2 Serialize the `SyncResult` to JSON and return as `Ok(String)`
-  - [ ] 5.3 Update the `other =>` error message to include `sync-github-issues` in the available actions list
+- [x] Task 5: Wire `sync-github-issues` action into `execute_action()` (AC: 4)
+  - [x] 5.1 In `src/pack.rs`, add match arm `"sync-github-issues"` that calls `crate::github_sync::sync_issues_to_board(&config)`
+  - [x] 5.2 Serialize the `SyncResult` to JSON and return as `Ok(String)`
+  - [x] 5.3 Update the `other =>` error message to include `sync-github-issues` in the available actions list
 
-- [ ] Task 6: Write unit tests (AC: 1, 2, 3)
-  - [ ] 6.1 `test_sync_result_serializes_correctly` -- verify JSON output shape
-  - [ ] 6.2 `test_issue_to_task_metadata_shape` -- verify metadata JSON contains issue_number, issue_url, labels, milestone
-  - [ ] 6.3 `test_sync_result_default_counts` -- verify initial counts are all zero
+- [x] Task 6: Write unit tests (AC: 1, 2, 3)
+  - [x] 6.1 `test_sync_result_serializes_correctly` -- verify JSON output shape
+  - [x] 6.2 `test_issue_to_task_metadata_shape` -- verify metadata JSON contains issue_number, issue_url, labels, milestone
+  - [x] 6.3 `test_sync_result_default_counts` -- verify initial counts are all zero
 
-- [ ] Task 7: Write integration test (AC: 1, 2, 4)
+- [ ] Task 7: Write integration test (AC: 1, 2, 4) -- deferred to future; requires live Pulse API + plugin-board
   - [ ] 7.1 Create `tests/github_sync_integration.rs` with `#[ignore]` tests
   - [ ] 7.2 `test_sync_github_issues_creates_tasks` -- requires GITHUB_TOKEN + running Pulse API + plugin-board
   - [ ] 7.3 `test_sync_github_issues_is_idempotent` -- run sync twice, verify second run shows updated/skipped (not created)
@@ -230,9 +230,26 @@ The `source: "github-sync"` field allows distinguishing synced tasks from manual
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Created `src/github_sync.rs` with `SyncResult`, `sync_issues_to_board()`, open/closed issue sync logic
+- Added `create_task()`, `find_task_by_issue_number()`, `get_task_metadata()` to `src/board_client.rs`
+- Wired `sync-github-issues` action in `src/pack.rs`
+- Added `pub mod github_sync` to `src/lib.rs` behind WASM gate
+- 4 unit tests for SyncResult serialization, metadata shape, default counts, no-milestone case
+- All 163 tests pass, clippy clean
+- Removed unused `SyncedTask` struct to satisfy clippy dead_code warning
+- Integration tests (Task 7) deferred -- require live Pulse API + plugin-board
 
 ### File List
+- `src/github_sync.rs` (new) - GitHub issue sync module
+- `src/board_client.rs` (modified) - Added create_task, find_task_by_issue_number, get_task_metadata
+- `src/pack.rs` (modified) - Added sync-github-issues action
+- `src/lib.rs` (modified) - Added pub mod github_sync behind WASM gate
+
+### Change Log
+- 2026-03-27: Story 22-2 implemented and moved to review

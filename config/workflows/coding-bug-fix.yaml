@@ -123,5 +123,5 @@ steps:
     executor: plugin-git-ops
     optional: true
     config:
-      command: ["plugin-git-pr", "create-pr", "fix: {{input}}"]
+      command: ["plugin-git-pr", "create-pr", "fix: {{input}}", "{{issue_closing_ref}}"]
       timeout_seconds: 30

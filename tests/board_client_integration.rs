@@ -10,7 +10,7 @@ const TEST_WORKSPACE: &str = "Default";
 fn require_board_plugin() {
     if !board_client::is_available() {
         panic!(
-            "plugin-board not available at localhost:8080. \
+            "plugin-board not available (checked via capability RPC + HTTP discovery). \
              Start Pulse server with plugin-board before running these tests."
         );
     }
@@ -38,7 +38,10 @@ fn test_board_plugin_is_available() {
 fn test_list_assignments_returns_items() {
     require_board_plugin();
     let assignments = list_all();
-    assert!(!assignments.is_empty(), "Expected at least one assignment in workspace '{TEST_WORKSPACE}'");
+    assert!(
+        !assignments.is_empty(),
+        "Expected at least one assignment in workspace '{TEST_WORKSPACE}'"
+    );
     for a in &assignments {
         assert!(!a.id.is_empty(), "Assignment missing id");
     }
@@ -58,7 +61,11 @@ fn test_list_assignments_filter_by_status() {
         assert_eq!(a.status, "done", "Expected done, got {}", a.status);
     }
     for a in &ready {
-        assert_eq!(a.status, "ready-for-dev", "Expected ready-for-dev, got {}", a.status);
+        assert_eq!(
+            a.status, "ready-for-dev",
+            "Expected ready-for-dev, got {}",
+            a.status
+        );
     }
 }
 
@@ -79,12 +86,13 @@ fn test_update_assignment_status() {
     let task = assignments.first().expect("Need at least one task");
     let original_status = task.status.clone();
 
-    let new_status = if original_status == "review" { "in-progress" } else { "review" };
-    board_client::update_assignment(
-        &task.id,
-        &serde_json::json!({"status": new_status}),
-    )
-    .unwrap();
+    let new_status = if original_status == "review" {
+        "in-progress"
+    } else {
+        "review"
+    };
+    board_client::update_assignment(&task.id, &serde_json::json!({"status": new_status}))
+        .unwrap();
 
     let updated = list_all()
         .into_iter()
@@ -117,14 +125,23 @@ fn test_add_comment() {
     let body = reqwest::blocking::get(&url).unwrap().text().unwrap();
     let val: serde_json::Value = serde_json::from_str(&body).unwrap();
     let task_val = val.get("task").unwrap_or(&val);
-    let meta = task_val.get("metadata").expect("task should have metadata");
-    let comments = meta.get("comments").and_then(|c| c.as_array()).expect("should have comments");
+    let meta = task_val
+        .get("metadata")
+        .expect("task should have metadata");
+    let comments = meta
+        .get("comments")
+        .and_then(|c| c.as_array())
+        .expect("should have comments");
 
     let has_test_comment = comments.iter().any(|c| {
         c.get("content").and_then(|v| v.as_str()) == Some("Integration test comment")
             && c.get("author").and_then(|v| v.as_str()) == Some("test-runner")
     });
-    assert!(has_test_comment, "Comment not found. Comments: {:?}", comments);
+    assert!(
+        has_test_comment,
+        "Comment not found. Comments: {:?}",
+        comments
+    );
 }
 
 // ── auto_dev integration ──
@@ -136,9 +153,10 @@ fn test_auto_dev_status_via_board_client() {
     let status = plugin_coding_pack::auto_dev::auto_dev_status(&config).unwrap();
 
     assert!(status.get("total").is_some(), "Missing 'total' field");
-    assert!(status.get("by_status").is_some(), "Missing 'by_status' field");
-    // total may be 0 if board_client fetches without workspace filter
-    // just check the shape is correct
+    assert!(
+        status.get("by_status").is_some(),
+        "Missing 'by_status' field"
+    );
     assert!(status["total"].is_number());
 }
 
@@ -162,18 +180,27 @@ fn test_auto_dev_resolve_workflow() {
         labels: vec!["bug".to_string()],
         ..Default::default()
     };
-    assert_eq!(plugin_coding_pack::auto_dev::resolve_workflow_id(&bug), "coding-bug-fix");
+    assert_eq!(
+        plugin_coding_pack::auto_dev::resolve_workflow_id(&bug),
+        "coding-bug-fix"
+    );
 
     let story = Assignment {
         labels: vec!["story".to_string()],
         ..Default::default()
     };
-    assert_eq!(plugin_coding_pack::auto_dev::resolve_workflow_id(&story), "coding-story-dev");
+    assert_eq!(
+        plugin_coding_pack::auto_dev::resolve_workflow_id(&story),
+        "coding-story-dev"
+    );
 
     let explicit = Assignment {
         workflow_id: "coding-review".to_string(),
         labels: vec!["bug".to_string()],
         ..Default::default()
     };
-    assert_eq!(plugin_coding_pack::auto_dev::resolve_workflow_id(&explicit), "coding-review");
+    assert_eq!(
+        plugin_coding_pack::auto_dev::resolve_workflow_id(&explicit),
+        "coding-review"
+    );
 }

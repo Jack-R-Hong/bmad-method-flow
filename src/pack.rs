@@ -95,11 +95,111 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
                     .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
             )
         }
+        "sync-github-issues" => {
+            let result = crate::github_sync::sync_issues_to_board(&config)?;
+            to_json_string(
+                serde_json::to_value(&result)
+                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
+            )
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "cleanup-worktrees" => {
+            let result = crate::worktree_tracker::cleanup_completed_worktrees(&config)?;
+            to_json_string(
+                serde_json::to_value(&result)
+                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
+            )
+        }
+        #[cfg(target_arch = "wasm32")]
+        "cleanup-worktrees" => {
+            Err(WitPluginError::internal("cleanup-worktrees not available in WASM"))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "worktree-status" => {
+            to_json_string(crate::worktree_tracker::worktree_status(&config))
+        }
+        #[cfg(target_arch = "wasm32")]
+        "worktree-status" => {
+            Err(WitPluginError::internal("worktree-status not available in WASM"))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "recover-worktrees" => {
+            let result = crate::worktree_tracker::recover_orphaned_worktrees(&config)?;
+            to_json_string(
+                serde_json::to_value(&result)
+                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
+            )
+        }
+        #[cfg(target_arch = "wasm32")]
+        "recover-worktrees" => {
+            Err(WitPluginError::internal("recover-worktrees not available in WASM"))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "check-pr-reviews" => {
+            let result = check_pr_reviews_value(&config)?;
+            to_json_string(Ok(result))
+        }
+        #[cfg(target_arch = "wasm32")]
+        "check-pr-reviews" => {
+            Err(WitPluginError::internal("check-pr-reviews not available in WASM"))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "build-fix-context" => {
+            let pr_number = input
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("pr_number"))
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| {
+                    WitPluginError::invalid_input(
+                        "build-fix-context requires 'pr_number' in payload",
+                    )
+                })?;
+            let client = crate::github_client::GitHubClient::new()?;
+            let ctx = client.build_fix_context(pr_number)?;
+            to_json_string(
+                serde_json::to_value(&ctx)
+                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
+            )
+        }
+        #[cfg(target_arch = "wasm32")]
+        "build-fix-context" => {
+            Err(WitPluginError::internal("build-fix-context not available in WASM"))
+        }
         other => Err(WitPluginError::not_found(format!(
-            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query, data-mutate, auto-dev-status, auto-dev-next, auto-dev-watch",
+            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query, data-mutate, auto-dev-status, auto-dev-next, auto-dev-watch, sync-github-issues, cleanup-worktrees, worktree-status, recover-worktrees, check-pr-reviews, build-fix-context",
             other
         ))),
     }
+}
+
+/// Check all open auto-dev PRs for review status.
+#[cfg(not(target_arch = "wasm32"))]
+fn check_pr_reviews_value(
+    _config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
+    let client = crate::github_client::GitHubClient::new()?;
+    let prs = client.list_open_prs()?;
+
+    let auto_dev_prs: Vec<&crate::github_client::PullRequest> = prs
+        .iter()
+        .filter(|pr| crate::github_client::is_auto_dev_pr(pr))
+        .collect();
+
+    let mut results = Vec::new();
+    for pr in auto_dev_prs {
+        let reviews = client.list_pr_reviews(pr.number)?;
+        let review_state = crate::github_client::aggregate_review_state(&reviews);
+        results.push(serde_json::json!({
+            "pr_number": pr.number,
+            "title": pr.title,
+            "branch": pr.head.ref_field,
+            "review_state": review_state,
+            "html_url": pr.html_url,
+        }));
+    }
+
+    Ok(serde_json::Value::Array(results))
 }
 
 fn to_json_string(
@@ -489,5 +589,101 @@ mod tests {
         let input = test_input("does-not-exist");
         let err = execute_action(&input).unwrap_err();
         assert_eq!(err.code, "not_found");
+    }
+
+    fn test_input_with_workspace(action: &str, workspace_dir: &str) -> CodingPackInput {
+        CodingPackInput {
+            action: action.to_string(),
+            target: None,
+            workflow_id: None,
+            input: None,
+            endpoint: None,
+            payload: None,
+            workspace_dir: Some(workspace_dir.to_string()),
+            workspace: None,
+            board_id: None,
+        }
+    }
+
+    #[test]
+    fn cleanup_worktrees_action_dispatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        // init git repo so git commands work
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let input = test_input_with_workspace("cleanup-worktrees", tmp.path().to_str().unwrap());
+        let result = execute_action(&input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.get("removed").is_some());
+        assert!(parsed.get("skipped").is_some());
+        assert!(parsed.get("errors").is_some());
+    }
+
+    #[test]
+    fn worktree_status_action_dispatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = test_input_with_workspace("worktree-status", tmp.path().to_str().unwrap());
+        let result = execute_action(&input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.get("worktrees").is_some());
+        assert!(parsed.get("total").is_some());
+        assert!(parsed.get("by_status").is_some());
+    }
+
+    #[test]
+    fn recover_worktrees_action_dispatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        // init git repo so git worktree prune and list work
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let input = test_input_with_workspace("recover-worktrees", tmp.path().to_str().unwrap());
+        let result = execute_action(&input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.get("pruned").is_some());
+        assert!(parsed.get("cleaned").is_some());
+        assert!(parsed.get("errors").is_some());
+    }
+
+    // ── Story 23-1: check-pr-reviews action recognized ──────────────
+
+    #[test]
+    fn check_pr_reviews_action_is_recognized() {
+        // Verify the action is dispatched (will fail due to no GITHUB_TOKEN, not "not_found")
+        let input = test_input("check-pr-reviews");
+        let err = execute_action(&input).unwrap_err();
+        // Should be invalid_input (no GITHUB_TOKEN), not not_found
+        assert_ne!(
+            err.code, "not_found",
+            "check-pr-reviews should be in the dispatch table"
+        );
+    }
+
+    // ── Story 23-2: build-fix-context action recognized ─────────────
+
+    #[test]
+    fn build_fix_context_action_recognized() {
+        // Without pr_number in payload -> invalid_input, NOT not_found
+        let input = test_input("build-fix-context");
+        let err = execute_action(&input).unwrap_err();
+        assert_eq!(
+            err.code, "invalid_input",
+            "build-fix-context should be recognized and require pr_number"
+        );
     }
 }

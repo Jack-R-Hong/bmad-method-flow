@@ -1,6 +1,6 @@
 # Story 24.3: Recover Orphaned Worktrees and Report Status
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -28,59 +28,59 @@ So that I have visibility into worktree usage and can reclaim resources from aba
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Implement `git worktree prune` and `git worktree list` helpers (AC: 3, 4)
-  - [ ] 1.1 Implement `fn run_git_worktree_prune(config: &WorkspaceConfig) -> Result<(), WitPluginError>` — runs `git worktree prune` via `std::process::Command` with `current_dir` set to `config.base_dir`. Log the result. If the command fails, log a warning and return `Ok(())` (prune failure is non-fatal).
-  - [ ] 1.2 Implement `fn list_git_worktrees(config: &WorkspaceConfig) -> Result<Vec<GitWorktreeInfo>, WitPluginError>` — runs `git worktree list --porcelain` via `std::process::Command`, parses output into structured data. Map command failures to `WitPluginError::internal()`.
-  - [ ] 1.3 Define `GitWorktreeInfo` struct: `path: String`, `branch: Option<String>`, `head: String`, `bare: bool`. This is an internal type, not serialized to the registry.
+- [x] Task 1: Implement `git worktree prune` and `git worktree list` helpers (AC: 3, 4)
+  - [x] 1.1 Implement `fn run_git_worktree_prune(config: &WorkspaceConfig) -> Result<(), WitPluginError>` — runs `git worktree prune` via `std::process::Command` with `current_dir` set to `config.base_dir`. Log the result. If the command fails, log a warning and return `Ok(())` (prune failure is non-fatal).
+  - [x] 1.2 Implement `fn list_git_worktrees(config: &WorkspaceConfig) -> Result<Vec<GitWorktreeInfo>, WitPluginError>` — runs `git worktree list --porcelain` via `std::process::Command`, parses output into structured data. Map command failures to `WitPluginError::internal()`.
+  - [x] 1.3 Define `GitWorktreeInfo` struct: `path: String`, `branch: Option<String>`, `head: String`, `bare: bool`. This is an internal type, not serialized to the registry.
 
-- [ ] Task 2: Implement `detect_untracked_worktrees()` (AC: 4)
-  - [ ] 2.1 Implement `pub fn detect_untracked_worktrees(config: &WorkspaceConfig) -> Result<u32, WitPluginError>` — returns count of newly added orphaned entries.
-  - [ ] 2.2 Call `list_git_worktrees()` to get all worktrees known to git.
-  - [ ] 2.3 Load registry via `load_registry()`.
-  - [ ] 2.4 For each git worktree, check if its `path` already exists in the registry. If not, and if its branch matches the `auto-dev/` prefix, add it as a new `WorktreeEntry` with status `Orphaned`, `task_id` and `workflow_id` extracted from the branch name, and `created_at` set to current time.
-  - [ ] 2.5 Ignore worktrees whose branch does NOT start with `auto-dev/` — these belong to the user or other tools.
-  - [ ] 2.6 Ignore the main worktree (the bare repo itself, which has no branch prefix or is on `main`/`master`).
-  - [ ] 2.7 Save updated registry if any new entries were added.
-  - [ ] 2.8 Log: `tracing::info!(plugin = "coding-pack", detected = count, "detected untracked auto-dev worktrees");`
+- [x] Task 2: Implement `detect_untracked_worktrees()` (AC: 4)
+  - [x] 2.1 Implement `pub fn detect_untracked_worktrees(config: &WorkspaceConfig) -> Result<u32, WitPluginError>` — returns count of newly added orphaned entries.
+  - [x] 2.2 Call `list_git_worktrees()` to get all worktrees known to git.
+  - [x] 2.3 Load registry via `load_registry()`.
+  - [x] 2.4 For each git worktree, check if its `path` already exists in the registry. If not, and if its branch matches the `auto-dev/` prefix, add it as a new `WorktreeEntry` with status `Orphaned`, `task_id` and `workflow_id` extracted from the branch name, and `created_at` set to current time.
+  - [x] 2.5 Ignore worktrees whose branch does NOT start with `auto-dev/` — these belong to the user or other tools.
+  - [x] 2.6 Ignore the main worktree (the bare repo itself, which has no branch prefix or is on `main`/`master`).
+  - [x] 2.7 Save updated registry if any new entries were added.
+  - [x] 2.8 Log: `tracing::info!(plugin = "coding-pack", detected = count, "detected untracked auto-dev worktrees");`
 
-- [ ] Task 3: Implement `recover_orphaned_worktrees()` (AC: 1, 2, 3)
-  - [ ] 3.1 Implement `pub fn recover_orphaned_worktrees(config: &WorkspaceConfig) -> Result<RecoveryResult, WitPluginError>`.
-  - [ ] 3.2 Define `RecoveryResult` struct: `pruned: bool`, `detected_untracked: u32`, `marked_orphaned: u32`, `cleaned: u32`, `skipped_recent: u32`, `errors: u32`. Derive `Debug, Serialize`.
-  - [ ] 3.3 Step 1: Call `run_git_worktree_prune()`.
-  - [ ] 3.4 Step 2: Call `detect_untracked_worktrees()` to find unregistered auto-dev worktrees.
-  - [ ] 3.5 Step 3: Load registry. For each entry with status `Failed`, compute age. If age > 1 hour, update status to `Orphaned`. Increment `marked_orphaned` counter. If age <= 1 hour, increment `skipped_recent` counter.
-  - [ ] 3.6 Step 4: For each entry with status `Orphaned`, call `cleanup_single_worktree()` (from Story 24.2). Track `cleaned` and `errors` counts.
-  - [ ] 3.7 Step 5: Rebuild registry entries — keep only entries that were NOT successfully cleaned. Save atomically.
-  - [ ] 3.8 Return `RecoveryResult` with all counts.
-  - [ ] 3.9 Log: `tracing::info!(plugin = "coding-pack", cleaned = result.cleaned, errors = result.errors, "orphaned worktree recovery complete");`
+- [x] Task 3: Implement `recover_orphaned_worktrees()` (AC: 1, 2, 3)
+  - [x] 3.1 Implement `pub fn recover_orphaned_worktrees(config: &WorkspaceConfig) -> Result<RecoveryResult, WitPluginError>`.
+  - [x] 3.2 Define `RecoveryResult` struct: `pruned: bool`, `detected_untracked: u32`, `marked_orphaned: u32`, `cleaned: u32`, `skipped_recent: u32`, `errors: u32`. Derive `Debug, Serialize`.
+  - [x] 3.3 Step 1: Call `run_git_worktree_prune()`.
+  - [x] 3.4 Step 2: Call `detect_untracked_worktrees()` to find unregistered auto-dev worktrees.
+  - [x] 3.5 Step 3: Load registry. For each entry with status `Failed`, compute age. If age > 1 hour, update status to `Orphaned`. Increment `marked_orphaned` counter. If age <= 1 hour, increment `skipped_recent` counter.
+  - [x] 3.6 Step 4: For each entry with status `Orphaned`, call `cleanup_single_worktree()` (from Story 24.2). Track `cleaned` and `errors` counts.
+  - [x] 3.7 Step 5: Rebuild registry entries — keep only entries that were NOT successfully cleaned. Save atomically.
+  - [x] 3.8 Return `RecoveryResult` with all counts.
+  - [x] 3.9 Log: `tracing::info!(plugin = "coding-pack", cleaned = result.cleaned, errors = result.errors, "orphaned worktree recovery complete");`
 
-- [ ] Task 4: Implement `worktree_status()` for status reporting (AC: 5, 7)
-  - [ ] 4.1 Implement `pub fn worktree_status(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError>`.
-  - [ ] 4.2 Load registry. For each entry, compute `age` as a human-readable string (e.g., "2h 15m", "5m", "3d 1h").
-  - [ ] 4.3 Build a JSON array of objects with fields: `path`, `branch`, `task_id`, `workflow_id`, `status`, `age`, `created_at`.
-  - [ ] 4.4 Return the JSON value: `{"worktrees": [...], "total": N, "by_status": {"active": 2, "completed": 1, ...}}`.
-  - [ ] 4.5 Implement `fn format_age(created_at: &str) -> String` — parse the ISO 8601 timestamp, compute duration from now, format as human-readable. If parsing fails, return `"unknown"`.
+- [x] Task 4: Implement `worktree_status()` for status reporting (AC: 5, 7)
+  - [x] 4.1 Implement `pub fn worktree_status(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError>`.
+  - [x] 4.2 Load registry. For each entry, compute `age` as a human-readable string (e.g., "2h 15m", "5m", "3d 1h").
+  - [x] 4.3 Build a JSON array of objects with fields: `path`, `branch`, `task_id`, `workflow_id`, `status`, `age`, `created_at`.
+  - [x] 4.4 Return the JSON value: `{"worktrees": [...], "total": N, "by_status": {"active": 2, "completed": 1, ...}}`.
+  - [x] 4.5 Implement `fn format_age(created_at: &str) -> String` — parse the ISO 8601 timestamp, compute duration from now, format as human-readable. If parsing fails, return `"unknown"`.
 
-- [ ] Task 5: Add pack actions `worktree-status` and `recover-worktrees` (AC: 5, 6)
-  - [ ] 5.1 In `src/pack.rs`, add match arm for `"worktree-status"` in `execute_action()`. Call `crate::worktree_tracker::worktree_status(&config)` and return via `to_json_string()`.
-  - [ ] 5.2 Add match arm for `"recover-worktrees"`. Call `crate::worktree_tracker::recover_orphaned_worktrees(&config)` and serialize the result.
-  - [ ] 5.3 Gate both actions with `#[cfg(not(target_arch = "wasm32"))]`. For WASM, return `WitPluginError::internal("not available in WASM")`.
-  - [ ] 5.4 Update the `other =>` catch-all error message to include `worktree-status`, `recover-worktrees`, and `cleanup-worktrees` in the available actions list.
+- [x] Task 5: Add pack actions `worktree-status` and `recover-worktrees` (AC: 5, 6)
+  - [x] 5.1 In `src/pack.rs`, add match arm for `"worktree-status"` in `execute_action()`. Call `crate::worktree_tracker::worktree_status(&config)` and return via `to_json_string()`.
+  - [x] 5.2 Add match arm for `"recover-worktrees"`. Call `crate::worktree_tracker::recover_orphaned_worktrees(&config)` and serialize the result.
+  - [x] 5.3 Gate both actions with `#[cfg(not(target_arch = "wasm32"))]`. For WASM, return `WitPluginError::internal("not available in WASM")`.
+  - [x] 5.4 Update the `other =>` catch-all error message to include `worktree-status`, `recover-worktrees`, and `cleanup-worktrees` in the available actions list.
 
-- [ ] Task 6: Write unit tests (AC: 1, 2, 4, 5, 7)
-  - [ ] 6.1 `test_parse_git_worktree_list_porcelain` — provide sample `git worktree list --porcelain` output, verify parsing into `GitWorktreeInfo` structs.
-  - [ ] 6.2 `test_detect_untracked_ignores_non_autodev_branches` — mock worktree list with `main` and `feature/foo` branches, verify they are not added to registry.
-  - [ ] 6.3 `test_detect_untracked_adds_autodev_branches` — mock worktree list with `auto-dev/coding-story-dev/task-42` branch, verify it is added as orphaned.
-  - [ ] 6.4 `test_recover_marks_old_failed_as_orphaned` — register a `Failed` entry with `created_at` 2 hours ago, run `recover_orphaned_worktrees()`, verify entry was marked orphaned and cleaned.
-  - [ ] 6.5 `test_recover_skips_recent_failed` — register a `Failed` entry with `created_at` 5 minutes ago, run recovery, verify entry is still in registry with status `Failed`.
-  - [ ] 6.6 `test_format_age_hours_minutes` — verify `format_age()` returns "2h 15m" for a timestamp 2 hours 15 minutes old.
-  - [ ] 6.7 `test_format_age_minutes_only` — verify `format_age()` returns "5m" for a timestamp 5 minutes old.
-  - [ ] 6.8 `test_format_age_days` — verify `format_age()` returns "3d 1h" for a timestamp 3 days 1 hour old.
-  - [ ] 6.9 `test_worktree_status_returns_json` — register entries with mixed statuses, call `worktree_status()`, verify JSON structure has `worktrees` array, `total`, `by_status`.
-  - [ ] 6.10 `test_worktree_status_action_dispatch` — call `execute_action()` with `{"action": "worktree-status"}`, verify valid JSON response.
-  - [ ] 6.11 `test_recover_worktrees_action_dispatch` — call `execute_action()` with `{"action": "recover-worktrees"}`, verify valid JSON response.
-  - [ ] 6.12 `test_extract_task_and_workflow_from_branch` — verify branch `auto-dev/coding-story-dev/task-42` extracts `workflow_id = "coding-story-dev"` and `task_id = "task-42"`.
-  - [ ] 6.13 Use `tempfile::tempdir()` for all tests that write to disk.
+- [x] Task 6: Write unit tests (AC: 1, 2, 4, 5, 7)
+  - [x] 6.1 `test_parse_git_worktree_list_porcelain` — provide sample `git worktree list --porcelain` output, verify parsing into `GitWorktreeInfo` structs.
+  - [x] 6.2 `test_detect_untracked_ignores_non_autodev_branches` — mock worktree list with `main` and `feature/foo` branches, verify they are not added to registry.
+  - [x] 6.3 `test_detect_untracked_adds_autodev_branches` — mock worktree list with `auto-dev/coding-story-dev/task-42` branch, verify it is added as orphaned.
+  - [x] 6.4 `test_recover_marks_old_failed_as_orphaned` — register a `Failed` entry with `created_at` 2 hours ago, run `recover_orphaned_worktrees()`, verify entry was marked orphaned and cleaned.
+  - [x] 6.5 `test_recover_skips_recent_failed` — register a `Failed` entry with `created_at` 5 minutes ago, run recovery, verify entry is still in registry with status `Failed`.
+  - [x] 6.6 `test_format_age_hours_minutes` — verify `format_age()` returns "2h 15m" for a timestamp 2 hours 15 minutes old.
+  - [x] 6.7 `test_format_age_minutes_only` — verify `format_age()` returns "5m" for a timestamp 5 minutes old.
+  - [x] 6.8 `test_format_age_days` — verify `format_age()` returns "3d 1h" for a timestamp 3 days 1 hour old.
+  - [x] 6.9 `test_worktree_status_returns_json` — register entries with mixed statuses, call `worktree_status()`, verify JSON structure has `worktrees` array, `total`, `by_status`.
+  - [x] 6.10 `test_worktree_status_action_dispatch` — call `execute_action()` with `{"action": "worktree-status"}`, verify valid JSON response.
+  - [x] 6.11 `test_recover_worktrees_action_dispatch` — call `execute_action()` with `{"action": "recover-worktrees"}`, verify valid JSON response.
+  - [x] 6.12 `test_extract_task_and_workflow_from_branch` — verify branch `auto-dev/coding-story-dev/task-42` extracts `workflow_id = "coding-story-dev"` and `task_id = "task-42"`.
+  - [x] 6.13 Use `tempfile::tempdir()` for all tests that write to disk.
 
 ## Dev Notes
 
@@ -420,9 +420,26 @@ For tests that need to verify `is_old_enough_for_orphan()`, create entries with 
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+- All 32 worktree-related tests pass (10 from 24-1, 7 from 24-2, 15 from 24-3)
+- All 3 pack dispatch tests pass (cleanup, status, recover)
+- All 202 lib tests pass with no regressions
+- Clippy clean for all worktree_tracker and pack changes
 
 ### Completion Notes List
+- Implemented run_git_worktree_prune() with non-fatal failure handling
+- Implemented list_git_worktrees() parsing porcelain output via parse_porcelain_worktree_list()
+- Implemented detect_untracked_worktrees() filtering only auto-dev/ branches
+- Implemented recover_orphaned_worktrees() full 5-step pipeline: prune, detect, mark old failed, clean orphaned, save
+- Implemented worktree_status() with BTreeMap for deterministic by_status ordering
+- Implemented format_age() and parse_iso8601_to_epoch() without chrono dependency
+- ORPHAN_AGE_THRESHOLD_SECS = 3600 (1 hour)
+- Wired worktree-status and recover-worktrees actions in pack.rs with WASM gates
+- Pack dispatch tests use isolated tempdir with git init for test isolation
+- extract_ids_from_branch() parses auto-dev/{workflow_id}/{task_id} branch naming convention
 
 ### File List
+- `src/worktree_tracker.rs` (modified) - added recovery, status, and age helper functions
+- `src/pack.rs` (modified) - added worktree-status and recover-worktrees action dispatch

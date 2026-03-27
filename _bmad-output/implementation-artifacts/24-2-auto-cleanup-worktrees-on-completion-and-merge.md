@@ -1,6 +1,6 @@
 # Story 24.2: Auto-Cleanup Worktrees on Completion and Merge
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -26,38 +26,38 @@ So that disk space is reclaimed and stale branches don't accumulate.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Implement `cleanup_worktree()` single-entry cleanup in `src/worktree_tracker.rs` (AC: 1, 2)
-  - [ ] 1.1 Implement `fn remove_git_worktree(config: &WorkspaceConfig, worktree_path: &str) -> Result<(), WitPluginError>` — runs `git worktree remove <path>` via `std::process::Command` with `current_dir` set to `config.base_dir`. If the command fails because the path does not exist, treat as success (already cleaned). Map other failures to `WitPluginError::internal()`.
-  - [ ] 1.2 Implement `fn delete_git_branch(config: &WorkspaceConfig, branch_name: &str) -> Result<(), WitPluginError>` — runs `git branch -d <branch>` via `std::process::Command` with `current_dir` set to `config.base_dir`. Use `-d` (safe delete, not `-D` force delete). If the branch does not exist or is unmerged, log a warning and return `Ok(())` — branch deletion failures are non-fatal.
-  - [ ] 1.3 Implement `fn cleanup_single_worktree(config: &WorkspaceConfig, entry: &WorktreeEntry) -> CleanupOutcome` — calls `remove_git_worktree()`, then `delete_git_branch()`. Returns a `CleanupOutcome` enum: `Removed`, `AlreadyGone`, `Error(String)`.
+- [x] Task 1: Implement `cleanup_worktree()` single-entry cleanup in `src/worktree_tracker.rs` (AC: 1, 2)
+  - [x] 1.1 Implement `fn remove_git_worktree(config: &WorkspaceConfig, worktree_path: &str) -> Result<(), WitPluginError>` — runs `git worktree remove <path>` via `std::process::Command` with `current_dir` set to `config.base_dir`. If the command fails because the path does not exist, treat as success (already cleaned). Map other failures to `WitPluginError::internal()`.
+  - [x] 1.2 Implement `fn delete_git_branch(config: &WorkspaceConfig, branch_name: &str) -> Result<(), WitPluginError>` — runs `git branch -d <branch>` via `std::process::Command` with `current_dir` set to `config.base_dir`. Use `-d` (safe delete, not `-D` force delete). If the branch does not exist or is unmerged, log a warning and return `Ok(())` — branch deletion failures are non-fatal.
+  - [x] 1.3 Implement `fn cleanup_single_worktree(config: &WorkspaceConfig, entry: &WorktreeEntry) -> CleanupOutcome` — calls `remove_git_worktree()`, then `delete_git_branch()`. Returns a `CleanupOutcome` enum: `Removed`, `AlreadyGone`, `Error(String)`.
 
-- [ ] Task 2: Implement `cleanup_completed_worktrees()` (AC: 1, 3, 4, 6)
-  - [ ] 2.1 Define `CleanupOutcome` enum: `Removed`, `AlreadyGone`, `Error(String)`. Derive `Debug`.
-  - [ ] 2.2 Define `CleanupResult` struct: `removed: u32`, `skipped: u32`, `errors: u32`, `details: Vec<CleanupDetail>`. Derive `Debug, Serialize`.
-  - [ ] 2.3 Define `CleanupDetail` struct: `worktree_path: String`, `outcome: String`. Derive `Debug, Serialize`.
-  - [ ] 2.4 Implement `pub fn cleanup_completed_worktrees(config: &WorkspaceConfig) -> Result<CleanupResult, WitPluginError>`.
-  - [ ] 2.5 Load registry. Iterate entries. Skip any entry with `status != Completed` (increment `skipped` counter for non-completed entries that are `Active`; do NOT skip `Failed` — only skip `Active`). Note: this function cleans `Completed` entries only. `Failed` and `Orphaned` entries are handled by Story 24.3.
-  - [ ] 2.6 For each `Completed` entry, call `cleanup_single_worktree()`. Track outcome in `CleanupDetail`.
-  - [ ] 2.7 After processing, rebuild the registry entries list: keep only entries that were NOT successfully removed. Save the updated registry atomically.
-  - [ ] 2.8 Return `CleanupResult` with accurate counts.
-  - [ ] 2.9 Add tracing logs: `tracing::info!(plugin = "coding-pack", removed = result.removed, skipped = result.skipped, errors = result.errors, "worktree cleanup complete");`
+- [x] Task 2: Implement `cleanup_completed_worktrees()` (AC: 1, 3, 4, 6)
+  - [x] 2.1 Define `CleanupOutcome` enum: `Removed`, `AlreadyGone`, `Error(String)`. Derive `Debug`.
+  - [x] 2.2 Define `CleanupResult` struct: `removed: u32`, `skipped: u32`, `errors: u32`, `details: Vec<CleanupDetail>`. Derive `Debug, Serialize`.
+  - [x] 2.3 Define `CleanupDetail` struct: `worktree_path: String`, `outcome: String`. Derive `Debug, Serialize`.
+  - [x] 2.4 Implement `pub fn cleanup_completed_worktrees(config: &WorkspaceConfig) -> Result<CleanupResult, WitPluginError>`.
+  - [x] 2.5 Load registry. Iterate entries. Skip any entry with `status != Completed` (increment `skipped` counter for non-completed entries that are `Active`; do NOT skip `Failed` — only skip `Active`). Note: this function cleans `Completed` entries only. `Failed` and `Orphaned` entries are handled by Story 24.3.
+  - [x] 2.6 For each `Completed` entry, call `cleanup_single_worktree()`. Track outcome in `CleanupDetail`.
+  - [x] 2.7 After processing, rebuild the registry entries list: keep only entries that were NOT successfully removed. Save the updated registry atomically.
+  - [x] 2.8 Return `CleanupResult` with accurate counts.
+  - [x] 2.9 Add tracing logs: `tracing::info!(plugin = "coding-pack", removed = result.removed, skipped = result.skipped, errors = result.errors, "worktree cleanup complete");`
 
-- [ ] Task 3: Add `cleanup-worktrees` action to pack dispatch (AC: 5)
-  - [ ] 3.1 In `src/pack.rs`, add a new match arm in `execute_action()` for `"cleanup-worktrees"`.
-  - [ ] 3.2 Call `crate::worktree_tracker::cleanup_completed_worktrees(&config)`.
-  - [ ] 3.3 Serialize the `CleanupResult` to JSON via `serde_json::to_value()` and return through `to_json_string()`.
-  - [ ] 3.4 Update the error message in the `other =>` catch-all arm to include `"cleanup-worktrees"` in the list of available actions.
-  - [ ] 3.5 Gate the action handler with `#[cfg(not(target_arch = "wasm32"))]` — for WASM builds, return `WitPluginError::internal("cleanup-worktrees not available in WASM")`.
+- [x] Task 3: Add `cleanup-worktrees` action to pack dispatch (AC: 5)
+  - [x] 3.1 In `src/pack.rs`, add a new match arm in `execute_action()` for `"cleanup-worktrees"`.
+  - [x] 3.2 Call `crate::worktree_tracker::cleanup_completed_worktrees(&config)`.
+  - [x] 3.3 Serialize the `CleanupResult` to JSON via `serde_json::to_value()` and return through `to_json_string()`.
+  - [x] 3.4 Update the error message in the `other =>` catch-all arm to include `"cleanup-worktrees"` in the list of available actions.
+  - [x] 3.5 Gate the action handler with `#[cfg(not(target_arch = "wasm32"))]` — for WASM builds, return `WitPluginError::internal("cleanup-worktrees not available in WASM")`.
 
-- [ ] Task 4: Write unit tests (AC: 1, 2, 3, 4)
-  - [ ] 4.1 `test_cleanup_completed_removes_entry` — register a worktree with status `Completed`, run `cleanup_completed_worktrees()`, verify registry is empty afterward. Use a temp dir so `git worktree remove` on a nonexistent path is handled gracefully.
-  - [ ] 4.2 `test_cleanup_skips_active` — register an `Active` worktree and a `Completed` worktree, run cleanup, verify only the completed one is removed and the active one remains in the registry.
-  - [ ] 4.3 `test_cleanup_result_counts` — register multiple worktrees with mixed statuses, run cleanup, verify `removed`, `skipped`, `errors` counts.
-  - [ ] 4.4 `test_cleanup_nonexistent_path_still_removes_entry` — register a worktree with a path that does not exist on disk, run cleanup, verify the entry is removed from registry (already-gone counts as success).
-  - [ ] 4.5 `test_remove_git_worktree_command` — verify `remove_git_worktree()` constructs the correct `git worktree remove` command (use a real temp git repo or check the error gracefully).
-  - [ ] 4.6 `test_delete_git_branch_safe_delete` — verify `delete_git_branch()` uses `-d` (not `-D`).
-  - [ ] 4.7 `test_cleanup_worktrees_action_dispatch` — call `execute_action()` with `{"action": "cleanup-worktrees"}`, verify it returns valid JSON with `removed`, `skipped`, `errors` fields.
-  - [ ] 4.8 Use `tempfile::tempdir()` for all tests that write to disk.
+- [x] Task 4: Write unit tests (AC: 1, 2, 3, 4)
+  - [x] 4.1 `test_cleanup_completed_removes_entry` — register a worktree with status `Completed`, run `cleanup_completed_worktrees()`, verify registry is empty afterward. Use a temp dir so `git worktree remove` on a nonexistent path is handled gracefully.
+  - [x] 4.2 `test_cleanup_skips_active` — register an `Active` worktree and a `Completed` worktree, run cleanup, verify only the completed one is removed and the active one remains in the registry.
+  - [x] 4.3 `test_cleanup_result_counts` — register multiple worktrees with mixed statuses, run cleanup, verify `removed`, `skipped`, `errors` counts.
+  - [x] 4.4 `test_cleanup_nonexistent_path_still_removes_entry` — register a worktree with a path that does not exist on disk, run cleanup, verify the entry is removed from registry (already-gone counts as success).
+  - [x] 4.5 `test_remove_git_worktree_command` — verify `remove_git_worktree()` constructs the correct `git worktree remove` command (use a real temp git repo or check the error gracefully).
+  - [x] 4.6 `test_delete_git_branch_safe_delete` — verify `delete_git_branch()` uses `-d` (not `-D`).
+  - [x] 4.7 `test_cleanup_worktrees_action_dispatch` — call `execute_action()` with `{"action": "cleanup-worktrees"}`, verify it returns valid JSON with `removed`, `skipped`, `errors` fields.
+  - [x] 4.8 Use `tempfile::tempdir()` for all tests that write to disk.
 
 ## Dev Notes
 
@@ -253,9 +253,22 @@ All required production dependencies are already in `Cargo.toml`:
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+- All 17 worktree tests pass (10 from 24-1 + 7 new cleanup tests)
+- Pack dispatch test passes (cleanup_worktrees_action_dispatch)
+- All 181 lib tests pass with no regressions
 
 ### Completion Notes List
+- Implemented remove_git_worktree() with localization-safe fallback (checks filesystem existence when git error messages don't match known patterns)
+- Implemented delete_git_branch() using -d (safe delete, never -D), returns Ok on failure (non-fatal)
+- Implemented cleanup_single_worktree() composing remove + branch delete
+- Implemented cleanup_completed_worktrees() that only cleans Completed entries, skips Active, preserves Failed/Orphaned
+- Defined CleanupOutcome, CleanupResult, CleanupDetail types
+- Wired cleanup-worktrees action in pack.rs with WASM gate
+- Tests use init_git_repo() helper to ensure git commands work in temp dirs
 
 ### File List
+- `src/worktree_tracker.rs` (modified) - added cleanup types and functions
+- `src/pack.rs` (modified) - added cleanup-worktrees action dispatch

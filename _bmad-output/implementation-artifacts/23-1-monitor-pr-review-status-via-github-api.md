@@ -1,6 +1,6 @@
 # Story 23.1: Monitor PR Review Status via GitHub API
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -24,25 +24,25 @@ So that PRs with "changes requested" are detected and queued for automated fixes
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add PR review types to `src/github_client.rs` (AC: 1, 2, 3)
+- [x] Task 1: Add PR review types to `src/github_client.rs` (AC: 1, 2, 3)
   - [ ] 1.1 Define `PrReview` struct with `#[derive(Debug, Clone, Serialize, Deserialize)]`: `id: u64`, `state: String`, `body: Option<String>`, `user: GitHubUser`, `submitted_at: Option<String>`
   - [ ] 1.2 Define `PrReviewComment` struct: `id: u64`, `path: String`, `line: Option<u32>`, `body: String`, `diff_hunk: String`, `user: GitHubUser`, `created_at: String`
   - [ ] 1.3 Define `PullRequest` struct: `number: u64`, `title: String`, `head: PrRef`, `base: PrRef`, `html_url: String`, `user: GitHubUser`, `body: Option<String>`, `requested_reviewers: Vec<GitHubUser>`
   - [ ] 1.4 Define `PrRef` struct: `ref_field: String` (serde rename from `"ref"`), `sha: String`
   - [ ] 1.5 Define `GitHubUser` struct if not already present: `login: String`
 
-- [ ] Task 2: Implement `list_pr_reviews(pr_number)` on `GitHubClient` (AC: 1)
+- [x] Task 2: Implement `list_pr_reviews(pr_number)` on `GitHubClient` (AC: 1)
   - [ ] 2.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/reviews`
   - [ ] 2.2 Add `Authorization: Bearer {token}` and `User-Agent: pulse-auto-dev` headers
   - [ ] 2.3 Parse response as `Vec<PrReview>`, handle pagination via `Link` header (reuse existing `parse_link_next()` helper from Story 22.1)
   - [ ] 2.4 Add `tracing::debug!` for page count and review count -- NEVER log the token
 
-- [ ] Task 3: Implement `get_review_comments(pr_number)` on `GitHubClient` (AC: 2)
+- [x] Task 3: Implement `get_review_comments(pr_number)` on `GitHubClient` (AC: 2)
   - [ ] 3.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/comments`
   - [ ] 3.2 Parse response as `Vec<PrReviewComment>` with pagination
   - [ ] 3.3 The `diff_hunk` field comes directly from GitHub's API response -- no custom parsing needed
 
-- [ ] Task 4: Implement `list_open_prs()` on `GitHubClient` (AC: 3)
+- [x] Task 4: Implement `list_open_prs()` on `GitHubClient` (AC: 3)
   - [ ] 4.1 Build URL: `{api_base}/repos/{owner}/{repo}/pulls?state=open&per_page=100`
   - [ ] 4.2 Parse response as `Vec<PullRequest>` with pagination
   - [ ] 4.3 Add `tracing::debug!` log for number of open PRs found

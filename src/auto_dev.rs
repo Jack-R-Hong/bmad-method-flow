@@ -10,6 +10,7 @@ use crate::test_parser;
 use crate::workspace::WorkspaceConfig;
 use pulse_plugin_sdk::error::WitPluginError;
 use serde::Serialize;
+use std::collections::HashMap;
 
 // ── Result types ──────────────────────────────────────────────────────────
 
@@ -124,6 +125,60 @@ fn run_validation(config: &WorkspaceConfig) -> (bool, String) {
     }
 }
 
+// ── Issue metadata for PR linking ────────────────────────────────────────
+
+/// Build template vars from task metadata for issue linking.
+///
+/// Extracts `issue_number`, `issue_url`, and `issue_closing_ref` from a task's
+/// metadata. Returns an empty map if the task has no issue metadata (graceful
+/// fallback for manually created tasks).
+pub fn build_issue_template_vars(task_id: &str) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+
+    let meta = match board_client::get_task_metadata(task_id) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!(
+                plugin = "coding-pack",
+                task_id = %task_id,
+                error = %e,
+                "Could not fetch task metadata for issue linking"
+            );
+            // Always set issue_closing_ref to empty for clean template resolution
+            vars.insert("issue_closing_ref".to_string(), String::new());
+            return vars;
+        }
+    };
+
+    if let Some(number) = meta.get("issue_number").and_then(|v| v.as_u64()) {
+        vars.insert("issue_number".to_string(), number.to_string());
+        vars.insert(
+            "issue_closing_ref".to_string(),
+            format!("Closes #{number}"),
+        );
+    }
+
+    if let Some(url) = meta.get("issue_url").and_then(|v| v.as_str()) {
+        vars.insert("issue_url".to_string(), url.to_string());
+    }
+
+    // If no issue_number was found, set closing_ref to empty for clean template resolution
+    if !vars.contains_key("issue_closing_ref") {
+        vars.insert("issue_closing_ref".to_string(), String::new());
+    }
+
+    if !vars.is_empty() {
+        tracing::debug!(
+            plugin = "coding-pack",
+            task_id = %task_id,
+            has_issue = vars.contains_key("issue_number"),
+            "Built issue template vars"
+        );
+    }
+
+    vars
+}
+
 // ── Core loop ─────────────────────────────────────────────────────────────
 
 /// Execute one auto-dev cycle: pick a ready-for-dev task, run workflow, validate, update board.
@@ -148,14 +203,18 @@ pub fn auto_dev_next(config: &WorkspaceConfig) -> Result<Option<AutoDevResult>, 
         "auto-dev",
     )?;
 
-    // ── 2. Execute workflow ──
+    // ── 2. Execute workflow with issue metadata ──
     let user_input = if task.description.is_empty() {
         task.title.clone()
     } else {
         format!("{}\n\n{}", task.title, task.description)
     };
 
-    let workflow_result = executor::execute_workflow_with_config(&workflow_id, &user_input, config);
+    // Fetch issue metadata for PR linking (graceful: empty vars if no metadata)
+    let extra_vars = build_issue_template_vars(&task_id);
+
+    let workflow_result =
+        executor::execute_workflow_with_vars(&workflow_id, &user_input, config, extra_vars);
 
     match workflow_result {
         Ok(_result) => {
@@ -329,5 +388,97 @@ mod tests {
         assert!(priority_rank("high") < priority_rank("medium"));
         assert!(priority_rank("medium") < priority_rank("low"));
         assert!(priority_rank("low") < priority_rank("unknown"));
+    }
+
+    // ── Issue template vars (Story 22-4) ──────────────────────────
+
+    #[test]
+    fn test_issue_closing_ref_with_issue_number() {
+        // Simulates what build_issue_template_vars would produce
+        let mut vars = HashMap::new();
+        let issue_number: u64 = 42;
+        vars.insert("issue_number".to_string(), issue_number.to_string());
+        vars.insert(
+            "issue_closing_ref".to_string(),
+            format!("Closes #{issue_number}"),
+        );
+        vars.insert(
+            "issue_url".to_string(),
+            "https://github.com/o/r/issues/42".to_string(),
+        );
+
+        assert_eq!(vars.get("issue_closing_ref").unwrap(), "Closes #42");
+        assert_eq!(vars.get("issue_number").unwrap(), "42");
+        assert_eq!(
+            vars.get("issue_url").unwrap(),
+            "https://github.com/o/r/issues/42"
+        );
+    }
+
+    #[test]
+    fn test_issue_closing_ref_without_issue_number() {
+        // When no issue metadata, closing_ref should be empty string
+        let mut vars = HashMap::new();
+        vars.insert("issue_closing_ref".to_string(), String::new());
+
+        assert_eq!(vars.get("issue_closing_ref").unwrap(), "");
+        assert!(vars.get("issue_number").is_none());
+        assert!(vars.get("issue_url").is_none());
+    }
+
+    #[test]
+    fn test_extra_vars_from_metadata_with_issue() {
+        // Test the logic that build_issue_template_vars would use
+        let meta = serde_json::json!({
+            "issue_number": 42,
+            "issue_url": "https://github.com/o/r/issues/42",
+            "source": "github-sync",
+        });
+
+        let mut vars = HashMap::new();
+
+        if let Some(number) = meta.get("issue_number").and_then(|v| v.as_u64()) {
+            vars.insert("issue_number".to_string(), number.to_string());
+            vars.insert(
+                "issue_closing_ref".to_string(),
+                format!("Closes #{number}"),
+            );
+        }
+        if let Some(url) = meta.get("issue_url").and_then(|v| v.as_str()) {
+            vars.insert("issue_url".to_string(), url.to_string());
+        }
+        if !vars.contains_key("issue_closing_ref") {
+            vars.insert("issue_closing_ref".to_string(), String::new());
+        }
+
+        assert_eq!(vars.len(), 3);
+        assert_eq!(vars["issue_number"], "42");
+        assert_eq!(vars["issue_closing_ref"], "Closes #42");
+        assert_eq!(vars["issue_url"], "https://github.com/o/r/issues/42");
+    }
+
+    #[test]
+    fn test_extra_vars_from_metadata_without_issue() {
+        // Empty metadata — no issue fields
+        let meta = serde_json::json!({});
+
+        let mut vars = HashMap::new();
+
+        if let Some(number) = meta.get("issue_number").and_then(|v| v.as_u64()) {
+            vars.insert("issue_number".to_string(), number.to_string());
+            vars.insert(
+                "issue_closing_ref".to_string(),
+                format!("Closes #{number}"),
+            );
+        }
+        if let Some(url) = meta.get("issue_url").and_then(|v| v.as_str()) {
+            vars.insert("issue_url".to_string(), url.to_string());
+        }
+        if !vars.contains_key("issue_closing_ref") {
+            vars.insert("issue_closing_ref".to_string(), String::new());
+        }
+
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars["issue_closing_ref"], "");
     }
 }

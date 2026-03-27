@@ -210,10 +210,10 @@ development_status:
 
   # Epic 22: GitHub Issue-Driven Task Intake
   epic-22: in-progress
-  22-1-implement-github-rest-api-client-for-issue-operations: ready-for-dev
-  22-2-sync-github-issues-to-plugin-board-as-tasks: ready-for-dev
-  22-3-filter-issues-by-label-and-milestone-for-selective-sync: ready-for-dev
-  22-4-auto-link-prs-to-source-github-issues: ready-for-dev
+  22-1-implement-github-rest-api-client-for-issue-operations: review
+  22-2-sync-github-issues-to-plugin-board-as-tasks: review
+  22-3-filter-issues-by-label-and-milestone-for-selective-sync: review
+  22-4-auto-link-prs-to-source-github-issues: review
   epic-22-retrospective: optional
 
   # Epic 23: PR Review Feedback Loop
@@ -226,9 +226,9 @@ development_status:
 
   # Epic 24: Worktree Lifecycle Management
   epic-24: in-progress
-  24-1-implement-worktree-ownership-tracking: ready-for-dev
-  24-2-auto-cleanup-worktrees-on-completion-and-merge: ready-for-dev
-  24-3-recover-orphaned-worktrees-and-report-status: ready-for-dev
+  24-1-implement-worktree-ownership-tracking: review
+  24-2-auto-cleanup-worktrees-on-completion-and-merge: review
+  24-3-recover-orphaned-worktrees-and-report-status: review
   epic-24-retrospective: optional
 
   # Epic 25: Agent Mesh Safety Guards

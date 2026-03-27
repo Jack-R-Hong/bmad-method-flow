@@ -20,6 +20,8 @@ pub struct WorkspaceConfig {
     pub use_injection_pipeline: bool,
     /// Auto-dev loop settings.
     pub auto_dev: AutoDevConfig,
+    /// GitHub issue sync filtering settings.
+    pub github_sync: GitHubSyncConfig,
 }
 
 /// Controls which workflows are available in this workspace.
@@ -56,6 +58,35 @@ pub struct MemorySettings {
     /// Re-index after each commit
     #[serde(default)]
     pub auto_reindex: Option<bool>,
+}
+
+/// GitHub issue sync filtering configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubSyncConfig {
+    /// Labels that issues must have to be synced. Empty means no label filter.
+    /// Issues must have ALL listed labels (AND logic).
+    #[serde(default)]
+    pub filter_labels: Vec<String>,
+    /// Milestone title that issues must belong to. None means no milestone filter.
+    #[serde(default)]
+    pub filter_milestone: Option<String>,
+    /// Polling interval in seconds for PR review status checks (default: 60).
+    #[serde(default = "default_review_poll_interval")]
+    pub review_poll_interval_secs: u64,
+}
+
+impl Default for GitHubSyncConfig {
+    fn default() -> Self {
+        Self {
+            filter_labels: Vec::new(),
+            filter_milestone: None,
+            review_poll_interval_secs: default_review_poll_interval(),
+        }
+    }
+}
+
+fn default_review_poll_interval() -> u64 {
+    60
 }
 
 /// Auto-dev loop configuration.
@@ -113,6 +144,9 @@ struct ConfigYaml {
     /// Auto-dev loop settings
     #[serde(default)]
     auto_dev: Option<AutoDevConfig>,
+    /// GitHub issue sync filtering
+    #[serde(default)]
+    github_sync: Option<GitHubSyncConfig>,
 }
 
 const DEFAULT_PLUGINS_DIR: &str = "config/plugins";
@@ -156,6 +190,7 @@ impl WorkspaceConfig {
                     defaults,
                     use_injection_pipeline: yaml.use_injection_pipeline.unwrap_or(false),
                     auto_dev: yaml.auto_dev.unwrap_or_default(),
+                    github_sync: yaml.github_sync.unwrap_or_default(),
                 };
             }
         }
@@ -174,6 +209,7 @@ impl WorkspaceConfig {
             defaults: DefaultSettings::default(),
             use_injection_pipeline: false,
             auto_dev: AutoDevConfig::default(),
+            github_sync: GitHubSyncConfig::default(),
         }
     }
 
@@ -394,6 +430,54 @@ use_injection_pipeline: true
         assert_eq!(parsed.use_injection_pipeline, Some(true));
     }
 
+    // ── GitHubSyncConfig (Story 22-3) ─────────────────────────────
+
+    #[test]
+    fn test_github_sync_config_default() {
+        let config = GitHubSyncConfig::default();
+        assert!(config.filter_labels.is_empty());
+        assert!(config.filter_milestone.is_none());
+    }
+
+    #[test]
+    fn test_github_sync_config_parsed() {
+        let yaml = r#"
+filter_labels:
+  - auto-dev
+  - ready
+filter_milestone: "Sprint 5"
+"#;
+        let parsed: GitHubSyncConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.filter_labels, vec!["auto-dev", "ready"]);
+        assert_eq!(parsed.filter_milestone.as_deref(), Some("Sprint 5"));
+    }
+
+    #[test]
+    fn test_config_yaml_backward_compatible_without_github_sync() {
+        let yaml = r#"
+plugin_dir: "config/plugins"
+auto_dev:
+  max_retries: 2
+"#;
+        let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
+        assert!(parsed.github_sync.is_none());
+    }
+
+    #[test]
+    fn test_config_yaml_with_github_sync() {
+        let yaml = r#"
+plugin_dir: "config/plugins"
+github_sync:
+  filter_labels:
+    - auto-dev
+  filter_milestone: "Sprint 5"
+"#;
+        let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
+        let gs = parsed.github_sync.expect("github_sync should be present");
+        assert_eq!(gs.filter_labels, vec!["auto-dev"]);
+        assert_eq!(gs.filter_milestone.as_deref(), Some("Sprint 5"));
+    }
+
     #[test]
     fn test_auto_dev_config_parsed_custom_values() {
         let yaml = r#"
@@ -408,5 +492,36 @@ auto_dev:
         assert_eq!(auto_dev.max_retries, 3);
         assert_eq!(auto_dev.max_tasks, 5);
         assert!(auto_dev.skip_validation);
+    }
+
+    // ── GitHubSyncConfig review_poll_interval (Story 23-1) ──────────
+
+    #[test]
+    fn test_github_sync_config_default_poll_interval() {
+        let config = GitHubSyncConfig::default();
+        assert_eq!(config.review_poll_interval_secs, 60);
+    }
+
+    #[test]
+    fn test_github_sync_config_parsed_poll_interval() {
+        let yaml = r#"
+filter_labels:
+  - auto-dev
+review_poll_interval_secs: 120
+"#;
+        let parsed: GitHubSyncConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.review_poll_interval_secs, 120);
+        assert_eq!(parsed.filter_labels, vec!["auto-dev"]);
+    }
+
+    #[test]
+    fn test_github_sync_config_poll_interval_defaults_when_missing() {
+        let yaml = r#"
+filter_labels:
+  - auto-dev
+filter_milestone: "Sprint 5"
+"#;
+        let parsed: GitHubSyncConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.review_poll_interval_secs, 60);
     }
 }

@@ -1,6 +1,6 @@
 # Story 24.1: Implement Worktree Ownership Tracking
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -26,49 +26,49 @@ So that worktrees can be safely cleaned up, conflicts detected, and status repor
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `src/worktree_tracker.rs` module with types (AC: 1)
-  - [ ] 1.1 Define `WorktreeStatus` enum with variants: `Active`, `Completed`, `Failed`, `Orphaned`. Derive `Debug, Clone, Serialize, Deserialize, PartialEq`. Use `#[serde(rename_all = "lowercase")]` so JSON values are `"active"`, `"completed"`, `"failed"`, `"orphaned"`.
-  - [ ] 1.2 Define `WorktreeEntry` struct with fields: `worktree_path: String`, `branch_name: String`, `task_id: String`, `workflow_id: String`, `created_at: String` (ISO 8601 UTC), `status: WorktreeStatus`. Derive `Debug, Clone, Serialize, Deserialize`.
-  - [ ] 1.3 Define `WorktreeRegistry` struct with fields: `entries: Vec<WorktreeEntry>`. Derive `Debug, Clone, Serialize, Deserialize, Default`.
-  - [ ] 1.4 Add `#[cfg(not(target_arch = "wasm32"))] pub mod worktree_tracker;` to `src/lib.rs` (after `board_client` line).
-  - [ ] 1.5 Add `use crate::workspace::WorkspaceConfig;` and `use pulse_plugin_sdk::error::WitPluginError;` imports.
+- [x] Task 1: Create `src/worktree_tracker.rs` module with types (AC: 1)
+  - [x] 1.1 Define `WorktreeStatus` enum with variants: `Active`, `Completed`, `Failed`, `Orphaned`. Derive `Debug, Clone, Serialize, Deserialize, PartialEq`. Use `#[serde(rename_all = "lowercase")]` so JSON values are `"active"`, `"completed"`, `"failed"`, `"orphaned"`.
+  - [x] 1.2 Define `WorktreeEntry` struct with fields: `worktree_path: String`, `branch_name: String`, `task_id: String`, `workflow_id: String`, `created_at: String` (ISO 8601 UTC), `status: WorktreeStatus`. Derive `Debug, Clone, Serialize, Deserialize`.
+  - [x] 1.3 Define `WorktreeRegistry` struct with fields: `entries: Vec<WorktreeEntry>`. Derive `Debug, Clone, Serialize, Deserialize, Default`.
+  - [x] 1.4 Add `#[cfg(not(target_arch = "wasm32"))] pub mod worktree_tracker;` to `src/lib.rs` (after `board_client` line).
+  - [x] 1.5 Add `use crate::workspace::WorkspaceConfig;` and `use pulse_plugin_sdk::error::WitPluginError;` imports.
 
-- [ ] Task 2: Implement registry persistence functions (AC: 1, 2, 4)
-  - [ ] 2.1 Implement `fn registry_path(config: &WorkspaceConfig) -> PathBuf` — returns `config.base_dir.join("config/worktree-registry.json")`.
-  - [ ] 2.2 Implement `pub fn load_registry(config: &WorkspaceConfig) -> Result<WorktreeRegistry, WitPluginError>` — reads the JSON file if it exists, returns empty registry if file is missing. Use `std::fs::read_to_string` then `serde_json::from_str`. Map IO errors to `WitPluginError::internal()`.
-  - [ ] 2.3 Implement `fn save_registry(config: &WorkspaceConfig, registry: &WorktreeRegistry) -> Result<(), WitPluginError>` — atomic write: serialize to JSON with `serde_json::to_string_pretty`, write to `{path}.tmp`, then `std::fs::rename` to final path. Ensure parent directory exists with `std::fs::create_dir_all`. Map errors to `WitPluginError::internal()`.
+- [x] Task 2: Implement registry persistence functions (AC: 1, 2, 4)
+  - [x] 2.1 Implement `fn registry_path(config: &WorkspaceConfig) -> PathBuf` — returns `config.base_dir.join("config/worktree-registry.json")`.
+  - [x] 2.2 Implement `pub fn load_registry(config: &WorkspaceConfig) -> Result<WorktreeRegistry, WitPluginError>` — reads the JSON file if it exists, returns empty registry if file is missing. Use `std::fs::read_to_string` then `serde_json::from_str`. Map IO errors to `WitPluginError::internal()`.
+  - [x] 2.3 Implement `fn save_registry(config: &WorkspaceConfig, registry: &WorktreeRegistry) -> Result<(), WitPluginError>` — atomic write: serialize to JSON with `serde_json::to_string_pretty`, write to `{path}.tmp`, then `std::fs::rename` to final path. Ensure parent directory exists with `std::fs::create_dir_all`. Map errors to `WitPluginError::internal()`.
 
-- [ ] Task 3: Implement `register_worktree()` function (AC: 2, 5)
-  - [ ] 3.1 Implement `pub fn register_worktree(config: &WorkspaceConfig, worktree_path: &str, branch_name: &str, task_id: &str, workflow_id: &str) -> Result<(), WitPluginError>`.
-  - [ ] 3.2 Load existing registry via `load_registry()`.
-  - [ ] 3.3 Check if an entry with the same `worktree_path` already exists. If yes, update its fields in place. If no, push a new `WorktreeEntry`.
-  - [ ] 3.4 Set `status` to `WorktreeStatus::Active` and `created_at` to current UTC time formatted as ISO 8601 string. Use `std::time::SystemTime::now()` and format manually (see Dev Notes for format helper).
-  - [ ] 3.5 Save registry via `save_registry()`.
-  - [ ] 3.6 Add `tracing::info!(plugin = "coding-pack", path = worktree_path, task = task_id, "registered worktree");` log.
+- [x] Task 3: Implement `register_worktree()` function (AC: 2, 5)
+  - [x] 3.1 Implement `pub fn register_worktree(config: &WorkspaceConfig, worktree_path: &str, branch_name: &str, task_id: &str, workflow_id: &str) -> Result<(), WitPluginError>`.
+  - [x] 3.2 Load existing registry via `load_registry()`.
+  - [x] 3.3 Check if an entry with the same `worktree_path` already exists. If yes, update its fields in place. If no, push a new `WorktreeEntry`.
+  - [x] 3.4 Set `status` to `WorktreeStatus::Active` and `created_at` to current UTC time formatted as ISO 8601 string. Use `std::time::SystemTime::now()` and format manually (see Dev Notes for format helper).
+  - [x] 3.5 Save registry via `save_registry()`.
+  - [x] 3.6 Add `tracing::info!(plugin = "coding-pack", path = worktree_path, task = task_id, "registered worktree");` log.
 
-- [ ] Task 4: Implement `update_worktree_status()` function (AC: 3)
-  - [ ] 4.1 Implement `pub fn update_worktree_status(config: &WorkspaceConfig, worktree_path: &str, new_status: WorktreeStatus) -> Result<(), WitPluginError>`.
-  - [ ] 4.2 Load registry, find entry by `worktree_path`. If not found, return `WitPluginError::not_found()` with descriptive message.
-  - [ ] 4.3 Update the entry's `status` field.
-  - [ ] 4.4 Save registry atomically.
-  - [ ] 4.5 Add `tracing::info!(plugin = "coding-pack", path = worktree_path, status = ?new_status, "updated worktree status");` log.
+- [x] Task 4: Implement `update_worktree_status()` function (AC: 3)
+  - [x] 4.1 Implement `pub fn update_worktree_status(config: &WorkspaceConfig, worktree_path: &str, new_status: WorktreeStatus) -> Result<(), WitPluginError>`.
+  - [x] 4.2 Load registry, find entry by `worktree_path`. If not found, return `WitPluginError::not_found()` with descriptive message.
+  - [x] 4.3 Update the entry's `status` field.
+  - [x] 4.4 Save registry atomically.
+  - [x] 4.5 Add `tracing::info!(plugin = "coding-pack", path = worktree_path, status = ?new_status, "updated worktree status");` log.
 
-- [ ] Task 5: Integrate with executor (AC: 6)
-  - [ ] 5.1 In `src/executor.rs`, add `use crate::worktree_tracker;` import (behind `#[cfg(not(target_arch = "wasm32"))]`).
-  - [ ] 5.2 In `execute_workflow_with_config()`, after the existing `extract_worktree_path()` block that sets `template_vars["working_dir"]`, add a call to `worktree_tracker::register_worktree()`. Extract the branch name from the git command arguments or from `template_vars`. If registration fails, log a warning but do NOT fail the workflow.
-  - [ ] 5.3 At the end of `execute_workflow_with_config()`, in both the success and error paths, call `worktree_tracker::update_worktree_status()` with `Completed` or `Failed` respectively. Only call this if a worktree was registered during this run (track with a local `Option<String>` for the worktree path). If the status update fails, log a warning but do NOT fail the workflow.
-  - [ ] 5.4 Gate all worktree_tracker calls with `#[cfg(not(target_arch = "wasm32"))]` blocks.
+- [x] Task 5: Integrate with executor (AC: 6)
+  - [x] 5.1 In `src/executor.rs`, add `use crate::worktree_tracker;` import (behind `#[cfg(not(target_arch = "wasm32"))]`).
+  - [x] 5.2 In `execute_workflow_with_config()`, after the existing `extract_worktree_path()` block that sets `template_vars["working_dir"]`, add a call to `worktree_tracker::register_worktree()`. Extract the branch name from the git command arguments or from `template_vars`. If registration fails, log a warning but do NOT fail the workflow.
+  - [x] 5.3 At the end of `execute_workflow_with_config()`, in both the success and error paths, call `worktree_tracker::update_worktree_status()` with `Completed` or `Failed` respectively. Only call this if a worktree was registered during this run (track with a local `Option<String>` for the worktree path). If the status update fails, log a warning but do NOT fail the workflow.
+  - [x] 5.4 Gate all worktree_tracker calls with `#[cfg(not(target_arch = "wasm32"))]` blocks.
 
-- [ ] Task 6: Write unit tests (AC: 1, 2, 3, 4, 5)
-  - [ ] 6.1 `test_worktree_status_serialization` — verify `WorktreeStatus::Active` serializes to `"active"` and round-trips correctly.
-  - [ ] 6.2 `test_worktree_entry_serialization` — create a `WorktreeEntry`, serialize to JSON, deserialize back, verify all fields match.
-  - [ ] 6.3 `test_load_missing_registry_returns_empty` — call `load_registry()` with a config pointing to a nonexistent directory, verify empty entries.
-  - [ ] 6.4 `test_register_and_load_round_trip` — register a worktree, then load registry and verify the entry is present with status `Active`.
-  - [ ] 6.5 `test_register_duplicate_path_updates` — register same path twice with different task_ids, verify only one entry exists with the second task_id.
-  - [ ] 6.6 `test_update_status_changes_entry` — register a worktree, then update status to `Completed`, verify the change persists.
-  - [ ] 6.7 `test_update_status_not_found` — call `update_worktree_status()` for a nonexistent path, verify `not_found` error.
-  - [ ] 6.8 `test_atomic_write_creates_file` — verify `save_registry()` creates the file and no `.tmp` file remains after save.
-  - [ ] 6.9 Use `tempfile::tempdir()` for all tests that write to disk. Add `tempfile` as a dev-dependency in `Cargo.toml` if not already present.
+- [x] Task 6: Write unit tests (AC: 1, 2, 3, 4, 5)
+  - [x] 6.1 `test_worktree_status_serialization` — verify `WorktreeStatus::Active` serializes to `"active"` and round-trips correctly.
+  - [x] 6.2 `test_worktree_entry_serialization` — create a `WorktreeEntry`, serialize to JSON, deserialize back, verify all fields match.
+  - [x] 6.3 `test_load_missing_registry_returns_empty` — call `load_registry()` with a config pointing to a nonexistent directory, verify empty entries.
+  - [x] 6.4 `test_register_and_load_round_trip` — register a worktree, then load registry and verify the entry is present with status `Active`.
+  - [x] 6.5 `test_register_duplicate_path_updates` — register same path twice with different task_ids, verify only one entry exists with the second task_id.
+  - [x] 6.6 `test_update_status_changes_entry` — register a worktree, then update status to `Completed`, verify the change persists.
+  - [x] 6.7 `test_update_status_not_found` — call `update_worktree_status()` for a nonexistent path, verify `not_found` error.
+  - [x] 6.8 `test_atomic_write_creates_file` — verify `save_registry()` creates the file and no `.tmp` file remains after save.
+  - [x] 6.9 Use `tempfile::tempdir()` for all tests that write to disk. Add `tempfile` as a dev-dependency in `Cargo.toml` if not already present.
 
 ## Dev Notes
 
@@ -317,9 +317,26 @@ tracing::debug!(plugin = "coding-pack", entries = registry.entries.len(), "loade
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+- All 10 unit tests pass (worktree_tracker::tests::*)
+- All 163 lib tests pass with no regressions
+- All 32+ integration/e2e tests pass
+- Clippy clean for worktree_tracker and executor changes (pre-existing github_sync dead_code warning)
 
 ### Completion Notes List
+- Created `src/worktree_tracker.rs` with WorktreeStatus, WorktreeEntry, WorktreeRegistry types
+- Implemented registry persistence with atomic write (temp + rename) pattern
+- Implemented register_worktree() with duplicate-path update semantics
+- Implemented update_worktree_status() with not_found error for missing entries
+- Implemented now_iso8601() and is_leap_year() helpers without chrono dependency
+- Integrated with executor: register on worktree creation, update status on workflow completion/failure
+- Added extract_branch_from_command() helper for -b flag extraction
+- All worktree_tracker calls gated with #[cfg(not(target_arch = "wasm32"))]
+- Registration/status failures log warnings but do not fail the workflow
 
 ### File List
+- `src/worktree_tracker.rs` (new) - worktree ownership tracking module
+- `src/lib.rs` (modified) - added worktree_tracker module declaration behind WASM gate
+- `src/executor.rs` (modified) - integrated worktree registration and status updates

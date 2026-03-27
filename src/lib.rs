@@ -4,8 +4,14 @@ pub mod auto_dev;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod board_client;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod github_client;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod github_sync;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod config_injector;
 pub mod executor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod worktree_tracker;
 pub mod pack;
 pub mod pulse_api;
 pub mod test_parser;

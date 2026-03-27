@@ -116,6 +116,20 @@ pub fn execute_workflow_with_config(
     user_input: &str,
     config: &crate::workspace::WorkspaceConfig,
 ) -> Result<serde_json::Value, WitPluginError> {
+    execute_workflow_with_vars(workflow_id, user_input, config, HashMap::new())
+}
+
+/// Execute a workflow with extra template variables (e.g., issue metadata from GitHub sync).
+///
+/// The `extra_vars` are merged into `template_vars` before any step executes, making them
+/// available for substitution in step commands and prompts. This enables features like
+/// `{{issue_closing_ref}}` in PR creation steps.
+pub fn execute_workflow_with_vars(
+    workflow_id: &str,
+    user_input: &str,
+    config: &crate::workspace::WorkspaceConfig,
+    extra_vars: HashMap<String, String>,
+) -> Result<serde_json::Value, WitPluginError> {
     let start = Instant::now();
     let plugins_dir = &config.plugins_dir;
     let workflows_dir = &config.workflows_dir;
@@ -144,6 +158,11 @@ pub fn execute_workflow_with_config(
         template_vars.insert("max_budget_usd".to_string(), budget.to_string());
     }
 
+    // Merge extra vars (e.g., issue_number, issue_url, issue_closing_ref)
+    for (k, v) in extra_vars {
+        template_vars.insert(k, v);
+    }
+
     execute_workflow_steps(
         workflow_id,
         &workflow,
@@ -153,6 +172,7 @@ pub fn execute_workflow_with_config(
         plugins_dir,
         start,
         config.use_injection_pipeline,
+        config,
     )
 }
 
@@ -178,8 +198,11 @@ fn execute_workflow_steps(
     plugins_dir: &Path,
     start: Instant,
     use_injection_pipeline: bool,
+    workspace_config: &crate::workspace::WorkspaceConfig,
 ) -> Result<serde_json::Value, WitPluginError> {
     let mut failed_required = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut registered_worktree_path: Option<String> = None;
 
     // Build retry index: map from on_failure_of step -> (retryable step id, RetryConfig)
     let retry_index: HashMap<String, (String, RetryConfig)> = workflow
@@ -279,7 +302,27 @@ fn execute_workflow_steps(
                         if let Some(cmd) = &config.command {
                             if let Some(wt_path) = extract_worktree_path(cmd, template_vars) {
                                 eprintln!("[workflow]   worktree: {}", wt_path);
-                                template_vars.insert("working_dir".to_string(), wt_path);
+                                template_vars.insert("working_dir".to_string(), wt_path.clone());
+
+                                // Register worktree for lifecycle tracking
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    let branch = extract_branch_from_command(cmd, template_vars)
+                                        .unwrap_or_else(|| wt_path.clone());
+                                    let task_id = template_vars.get("task_id").cloned().unwrap_or_default();
+                                    let wf_id = template_vars.get("workflow_id").cloned().unwrap_or_default();
+                                    if let Err(e) = crate::worktree_tracker::register_worktree(
+                                        workspace_config, &wt_path, &branch, &task_id, &wf_id,
+                                    ) {
+                                        tracing::warn!(
+                                            plugin = "coding-pack",
+                                            error = %e,
+                                            "failed to register worktree — continuing workflow"
+                                        );
+                                    } else {
+                                        registered_worktree_path = Some(wt_path);
+                                    }
+                                }
                             }
                         }
                     }
@@ -412,7 +455,26 @@ fn execute_workflow_steps(
         idx += 1;
     }
 
-    // 5. Build result
+    // 5. Update worktree status if one was registered
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(ref wt_path) = registered_worktree_path {
+        let wt_status = if failed_required {
+            crate::worktree_tracker::WorktreeStatus::Failed
+        } else {
+            crate::worktree_tracker::WorktreeStatus::Completed
+        };
+        if let Err(e) =
+            crate::worktree_tracker::update_worktree_status(workspace_config, wt_path, wt_status)
+        {
+            tracing::warn!(
+                plugin = "coding-pack",
+                error = %e,
+                "failed to update worktree status — continuing"
+            );
+        }
+    }
+
+    // 6. Build result
     let total_time = start.elapsed().as_millis() as u64;
     let steps_completed = outputs
         .values()
@@ -667,6 +729,26 @@ fn extract_worktree_path(
         .rev()
         .find(|arg| !arg.starts_with('-') && !["git", "worktree", "add"].contains(&arg.as_str()))
         .cloned()
+}
+
+/// Extract branch name from a git worktree add command.
+/// Looks for the `-b` or `-B` flag in the resolved command args.
+#[cfg(not(target_arch = "wasm32"))]
+fn extract_branch_from_command(
+    command: &[String],
+    template_vars: &HashMap<String, String>,
+) -> Option<String> {
+    let resolved: Vec<String> = command
+        .iter()
+        .map(|part| substitute_templates(part, template_vars))
+        .collect();
+    let mut iter = resolved.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "-b" || arg == "-B" {
+            return iter.next().cloned();
+        }
+    }
+    None
 }
 
 // ── PR fields extraction (for auto-generated PRs) ─────────────────────────
@@ -2197,5 +2279,39 @@ mod tests {
         assert_eq!(query.agent_name.as_deref(), Some("bmad/dev"));
         assert!(query.workflow_name.is_none());
         assert_eq!(query.step_type.as_deref(), Some("agent"));
+    }
+
+    // ── Issue template var substitution (Story 22-4) ──────────────
+
+    #[test]
+    fn test_template_substitution_with_issue_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("issue_closing_ref".to_string(), "Closes #42".to_string());
+        vars.insert("issue_number".to_string(), "42".to_string());
+        vars.insert(
+            "issue_url".to_string(),
+            "https://github.com/o/r/issues/42".to_string(),
+        );
+
+        let result = substitute_templates(
+            "PR body text\n\n{{issue_closing_ref}}",
+            &vars,
+        );
+        assert_eq!(result, "PR body text\n\nCloses #42");
+
+        let result2 = substitute_templates("Issue #{{issue_number}}", &vars);
+        assert_eq!(result2, "Issue #42");
+    }
+
+    #[test]
+    fn test_template_substitution_issue_vars_empty() {
+        let mut vars = HashMap::new();
+        vars.insert("issue_closing_ref".to_string(), String::new());
+
+        let result = substitute_templates(
+            "PR body text\n\n{{issue_closing_ref}}",
+            &vars,
+        );
+        assert_eq!(result, "PR body text\n\n");
     }
 }

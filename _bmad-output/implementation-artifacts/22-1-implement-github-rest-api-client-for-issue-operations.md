@@ -1,6 +1,6 @@
 # Story 22.1: Implement GitHub REST API Client for Issue Operations
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -22,40 +22,40 @@ So that the plugin has a reusable, tested foundation for all GitHub API interact
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `src/github_client.rs` module with types (AC: 1, 2)
-  - [ ] 1.1 Define `GitHubClient` struct with `token: String`, `owner: String`, `repo: String`, `client: reqwest::blocking::Client`
-  - [ ] 1.2 Define `GitHubIssue` struct with serde Deserialize: `number: u64`, `title: String`, `body: Option<String>`, `labels: Vec<GitHubLabel>`, `milestone: Option<GitHubMilestone>`, `html_url: String`, `state: String`
-  - [ ] 1.3 Define `GitHubLabel` struct: `name: String`
-  - [ ] 1.4 Define `GitHubMilestone` struct: `title: String`, `number: u64`
-  - [ ] 1.5 Add `pub mod github_client;` to `src/lib.rs` (behind `#[cfg(not(target_arch = "wasm32"))]`)
+- [x] Task 1: Create `src/github_client.rs` module with types (AC: 1, 2)
+  - [x] 1.1 Define `GitHubClient` struct with `token: String`, `owner: String`, `repo: String`, `client: reqwest::blocking::Client`
+  - [x] 1.2 Define `GitHubIssue` struct with serde Deserialize: `number: u64`, `title: String`, `body: Option<String>`, `labels: Vec<GitHubLabel>`, `milestone: Option<GitHubMilestone>`, `html_url: String`, `state: String`
+  - [x] 1.3 Define `GitHubLabel` struct: `name: String`
+  - [x] 1.4 Define `GitHubMilestone` struct: `title: String`, `number: u64`
+  - [x] 1.5 Add `pub mod github_client;` to `src/lib.rs` (behind `#[cfg(not(target_arch = "wasm32"))]`)
 
-- [ ] Task 2: Implement `GitHubClient::new()` constructor (AC: 1, 3)
-  - [ ] 2.1 Read `GITHUB_TOKEN` from env, return `WitPluginError::invalid_input` if missing
-  - [ ] 2.2 Build `reqwest::blocking::Client` with 5-second timeout and `User-Agent: pulse-auto-dev` header
-  - [ ] 2.3 Parse `owner/repo` from `git remote get-url origin` via `std::process::Command`
-  - [ ] 2.4 Support both SSH (`git@github.com:owner/repo.git`) and HTTPS (`https://github.com/owner/repo.git`) formats
-  - [ ] 2.5 Read optional `GITHUB_API_URL` env var for GitHub Enterprise, default to `https://api.github.com`
+- [x] Task 2: Implement `GitHubClient::new()` constructor (AC: 1, 3)
+  - [x] 2.1 Read `GITHUB_TOKEN` from env, return `WitPluginError::invalid_input` if missing
+  - [x] 2.2 Build `reqwest::blocking::Client` with 5-second timeout and `User-Agent: pulse-auto-dev` header
+  - [x] 2.3 Parse `owner/repo` from `git remote get-url origin` via `std::process::Command`
+  - [x] 2.4 Support both SSH (`git@github.com:owner/repo.git`) and HTTPS (`https://github.com/owner/repo.git`) formats
+  - [x] 2.5 Read optional `GITHUB_API_URL` env var for GitHub Enterprise, default to `https://api.github.com`
 
-- [ ] Task 3: Implement `list_issues()` with pagination (AC: 2, 4)
-  - [ ] 3.1 Build URL: `https://api.github.com/repos/{owner}/{repo}/issues`
-  - [ ] 3.2 Add query params: `state`, `labels` (comma-separated), `milestone`, `per_page=100`
-  - [ ] 3.3 Add auth header: `Authorization: Bearer {token}`
-  - [ ] 3.4 Parse `Link` header for `rel="next"` URL to handle pagination
-  - [ ] 3.5 Accumulate pages, cap at 10 pages (1000 issues max)
-  - [ ] 3.6 Filter out pull requests (GitHub issues API includes PRs; filter by absence of `pull_request` field)
+- [x] Task 3: Implement `list_issues()` with pagination (AC: 2, 4)
+  - [x] 3.1 Build URL: `https://api.github.com/repos/{owner}/{repo}/issues`
+  - [x] 3.2 Add query params: `state`, `labels` (comma-separated), `milestone`, `per_page=100`
+  - [x] 3.3 Add auth header: `Authorization: Bearer {token}`
+  - [x] 3.4 Parse `Link` header for `rel="next"` URL to handle pagination
+  - [x] 3.5 Accumulate pages, cap at 10 pages (1000 issues max)
+  - [x] 3.6 Filter out pull requests (GitHub issues API includes PRs; filter by absence of `pull_request` field)
 
-- [ ] Task 4: Add helper error function and logging (AC: 5)
-  - [ ] 4.1 Create `fn github_err(msg: impl std::fmt::Display) -> WitPluginError` helper
-  - [ ] 4.2 Add tracing logs with `plugin = "coding-pack"` field — NEVER log the token value
-  - [ ] 4.3 Run `cargo clippy -- -D warnings` and `cargo fmt --check`
+- [x] Task 4: Add helper error function and logging (AC: 5)
+  - [x] 4.1 Create `fn github_err(msg: impl std::fmt::Display) -> WitPluginError` helper
+  - [x] 4.2 Add tracing logs with `plugin = "coding-pack"` field — NEVER log the token value
+  - [x] 4.3 Run `cargo clippy -- -D warnings` and `cargo fmt --check`
 
-- [ ] Task 5: Write unit tests (AC: 1, 2, 3)
-  - [ ] 5.1 `test_parse_github_remote_https` — parse HTTPS remote URL
-  - [ ] 5.2 `test_parse_github_remote_ssh` — parse SSH remote URL
-  - [ ] 5.3 `test_new_without_token_returns_error` — verify error when `GITHUB_TOKEN` unset
-  - [ ] 5.4 `test_parse_link_header_next` — extract next page URL from Link header
-  - [ ] 5.5 `test_parse_link_header_none` — return None when no next page
-  - [ ] 5.6 `test_filter_pull_requests_from_issues` — verify PRs (with `pull_request` field) are excluded from results
+- [x] Task 5: Write unit tests (AC: 1, 2, 3)
+  - [x] 5.1 `test_parse_github_remote_https` — parse HTTPS remote URL
+  - [x] 5.2 `test_parse_github_remote_ssh` — parse SSH remote URL
+  - [x] 5.3 `test_new_without_token_returns_error` — verify error when `GITHUB_TOKEN` unset
+  - [x] 5.4 `test_parse_link_header_next` — extract next page URL from Link header
+  - [x] 5.5 `test_parse_link_header_none` — return None when no next page
+  - [x] 5.6 `test_filter_pull_requests_from_issues` — verify PRs (with `pull_request` field) are excluded from results
 
 ## Dev Notes
 
@@ -201,9 +201,23 @@ tracing::warn!(plugin = "coding-pack", remaining = rate_limit, "GitHub API rate 
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Created `src/github_client.rs` with `GitHubClient` struct, types, constructor, `list_issues()` with pagination, PR filtering, link header parsing, git remote parsing
+- Custom `Debug` impl on `GitHubClient` to redact token from debug output
+- 11 unit tests: remote URL parsing (SSH/HTTPS), link header parsing, missing token error, PR filtering, error helper
+- All 144 unit tests pass, clippy clean with `-D warnings`
+- Fixed pre-existing clippy warnings in `board_client.rs` and `pulse_api.rs` (redundant closures, map_or -> is_none_or)
 
 ### File List
+- `src/github_client.rs` (new) - GitHub REST API client module
+- `src/lib.rs` (modified) - Added `pub mod github_client` behind WASM gate
+- `src/board_client.rs` (modified) - Fixed pre-existing clippy warnings
+- `src/pulse_api.rs` (modified) - Fixed pre-existing clippy warning
+
+### Change Log
+- 2026-03-27: Story 22-1 implemented and moved to review

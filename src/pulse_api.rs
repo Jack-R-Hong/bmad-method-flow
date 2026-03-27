@@ -32,7 +32,7 @@ pub fn get_task(task_id: &str) -> Result<PulseTask, WitPluginError> {
     let body = reqwest::blocking::get(&url)
         .map_err(|e| api_err(format!("GET {url}: {e}")))?
         .text()
-        .map_err(|e| api_err(e))?;
+        .map_err(api_err)?;
 
     let val: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| api_err(format!("parse: {e}")))?;
