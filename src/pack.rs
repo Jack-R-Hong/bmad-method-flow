@@ -22,10 +22,14 @@ pub struct CodingPackInput {
     /// Mutation payload for data-mutate action
     #[serde(default)]
     pub payload: Option<serde_json::Value>,
-    /// Optional workspace root directory override.
+    /// Optional workspace root directory path override.
     /// If not set, falls back to PULSE_WORKSPACE_DIR env var, then current directory.
-    #[serde(default)]
+    #[serde(default, alias = "workspace_path")]
     pub workspace_dir: Option<String>,
+    /// Workspace name for Pulse API task filtering (e.g. "Default", "my-project").
+    /// This is NOT a filesystem path — it's the Pulse workspace identifier.
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// Execute a pack-level action.
@@ -57,12 +61,12 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
         }
         "data-query" => {
             let endpoint = input.endpoint.as_deref().unwrap_or("");
-            execute_data_query(endpoint, &config)
+            execute_data_query(endpoint, &config, input.workspace.as_deref())
         }
         "data-mutate" => {
             let endpoint = input.endpoint.as_deref().unwrap_or("");
             let payload = input.payload.clone().unwrap_or(serde_json::Value::Null);
-            execute_data_mutate(endpoint, &payload, &config)
+            execute_data_mutate(endpoint, &payload, &config, input.workspace.as_deref())
         }
         "auto-dev-status" => to_json_string(crate::auto_dev::auto_dev_status(&config)),
         "auto-dev-next" => {
@@ -268,17 +272,18 @@ fn pack_status_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitP
 
 /// Handle data-query requests from dashboard proxy.
 /// Routes endpoint paths to internal data functions.
-fn execute_data_query(endpoint: &str, config: &WorkspaceConfig) -> Result<String, WitPluginError> {
+/// `workspace` is the Pulse workspace name (not a path) for task filtering.
+fn execute_data_query(endpoint: &str, config: &WorkspaceConfig, workspace: Option<&str>) -> Result<String, WitPluginError> {
     let endpoint = endpoint.trim_start_matches('/');
     let result = match endpoint {
         "status" => pack_status_value(config)?,
         "workflows/list" => list_workflows_detail_value(config)?,
         "agents/list" => list_agents_value()?,
-        "board/data" => crate::board::get_board_data(config)?,
+        "board/data" => crate::board::get_board_data(config, workspace)?,
         "board/epics/list" => crate::board::get_epics_list(config)?,
         "board/assignments/list" => {
             // Try Pulse API, fallback to board-store
-            crate::pulse_api::get_board_data()
+            crate::pulse_api::get_board_data(workspace)
                 .or_else(|_| crate::board_store::get_assignments_list_from_store(config))?
         }
         ep if ep.starts_with("board/assignments/") => {
@@ -286,7 +291,7 @@ fn execute_data_query(endpoint: &str, config: &WorkspaceConfig) -> Result<String
             crate::pulse_api::get_assignment_detail(id)
                 .or_else(|_| crate::board_store::get_assignment_detail_from_store(id, config))?
         }
-        "board/filters" => crate::pulse_api::get_filter_options()
+        "board/filters" => crate::pulse_api::get_filter_options(workspace)
             .or_else(|_| crate::board::get_filter_options(config))?,
         "board/summary" => crate::board::get_board_summary(config)?,
         ep if ep.starts_with("board/epics/") => {
@@ -435,6 +440,7 @@ fn execute_data_mutate(
     endpoint: &str,
     payload: &serde_json::Value,
     config: &WorkspaceConfig,
+    workspace: Option<&str>,
 ) -> Result<String, WitPluginError> {
     let endpoint = endpoint.trim_start_matches('/');
     let result = match endpoint {
@@ -463,7 +469,7 @@ fn execute_data_mutate(
         }
         "board/assignments" => {
             // Try Pulse API, fallback to board-store
-            crate::pulse_api::create_assignment(payload)
+            crate::pulse_api::create_assignment(payload, workspace)
                 .or_else(|_| crate::board_store::create_assignment(&config.base_dir, payload))?
         }
         ep if ep.starts_with("board/assignments/") && ep.ends_with("/comments") => {
@@ -525,6 +531,7 @@ mod tests {
             endpoint: None,
             payload: None,
             workspace_dir: None,
+            workspace: None,
         }
     }
 

@@ -32,6 +32,8 @@ pub struct PulseTask {
     pub started_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,
+    #[serde(default, alias = "workspace")]
+    pub workspace_id: String,
     #[serde(default)]
     pub metadata: Option<TaskMetadata>,
 }
@@ -56,6 +58,9 @@ pub struct TaskMetadata {
     pub comments: Vec<Comment>,
     #[serde(default)]
     pub workflow_id: String,
+    /// Workspace directory this task belongs to (for multi-workspace filtering).
+    #[serde(default)]
+    pub workspace: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,9 +93,17 @@ struct TaskDetailResponse {
 
 // ── API calls ─────────────────────────────────────────────────────────────
 
-/// List all tasks from Pulse API.
-pub fn list_tasks() -> Result<Vec<PulseTask>, WitPluginError> {
-    let url = format!("{}/tasks?limit=500", api_base());
+/// List tasks from Pulse API, optionally filtered by workspace.
+pub fn list_tasks(workspace: Option<&str>) -> Result<Vec<PulseTask>, WitPluginError> {
+    let base = format!("{}/tasks", api_base());
+    let url = match workspace {
+        Some(ws) => {
+            reqwest::Url::parse_with_params(&base, &[("limit", "500"), ("workspace_id", ws)])
+                .map_err(|e| api_err(format!("URL build: {e}")))?
+                .to_string()
+        }
+        None => format!("{}?limit=500", base),
+    };
     let body = reqwest::blocking::get(&url)
         .map_err(|e| api_err(format!("GET {url}: {e}")))?
         .text()
@@ -122,10 +135,10 @@ pub fn get_task(task_id: &str) -> Result<PulseTask, WitPluginError> {
     serde_json::from_value(task_val).map_err(|e| api_err(format!("deserialize task: {e}")))
 }
 
-/// Create a new task with metadata.
+/// Create a new task with metadata and workspace.
 pub fn create_task(metadata: &TaskMetadata) -> Result<String, WitPluginError> {
     let url = format!("{}/tasks", api_base());
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "workflow_id": if metadata.workflow_id.is_empty() { "board" } else { &metadata.workflow_id },
         "state": match metadata.status.as_str() {
             "ready-for-dev" => "ReQueued",
@@ -136,6 +149,10 @@ pub fn create_task(metadata: &TaskMetadata) -> Result<String, WitPluginError> {
         },
         "metadata": metadata,
     });
+    // Set workspace_id on the task if provided
+    if !metadata.workspace.is_empty() {
+        payload["workspace_id"] = serde_json::Value::String(metadata.workspace.clone());
+    }
 
     let client = reqwest::blocking::Client::new();
     let resp = client
@@ -191,9 +208,9 @@ fn pulse_state_to_board_status(state: &str, meta: &TaskMetadata) -> String {
     .to_string()
 }
 
-/// Get board data for the Kanban view from Pulse tasks.
-pub fn get_board_data() -> Result<serde_json::Value, WitPluginError> {
-    let tasks = list_tasks()?;
+/// Get board data for the Kanban view from Pulse tasks, filtered by workspace name.
+pub fn get_board_data(workspace: Option<&str>) -> Result<serde_json::Value, WitPluginError> {
+    let tasks = list_tasks(workspace)?;
 
     let items: Vec<serde_json::Value> = tasks
         .iter()
@@ -409,8 +426,8 @@ pub fn get_assignment_detail(task_id: &str) -> Result<serde_json::Value, WitPlug
     }))
 }
 
-/// Create a new board assignment via Pulse API.
-pub fn create_assignment(payload: &serde_json::Value) -> Result<serde_json::Value, WitPluginError> {
+/// Create a new board assignment via Pulse API, tagged with workspace.
+pub fn create_assignment(payload: &serde_json::Value, workspace: Option<&str>) -> Result<serde_json::Value, WitPluginError> {
     let title = payload
         .get("title")
         .and_then(|v| v.as_str())
@@ -471,6 +488,7 @@ pub fn create_assignment(payload: &serde_json::Value) -> Result<serde_json::Valu
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        workspace: workspace.unwrap_or("").to_string(),
     };
 
     let task_id = create_task(&meta)?;
@@ -597,8 +615,8 @@ pub fn toggle_subtask(
     Ok(result)
 }
 
-/// Get filter options.
-pub fn get_filter_options() -> Result<serde_json::Value, WitPluginError> {
+/// Get filter options (workspace-aware — only includes labels from tasks in this workspace).
+pub fn get_filter_options(_workspace: Option<&str>) -> Result<serde_json::Value, WitPluginError> {
     Ok(serde_json::json!({
         "phases": [],
         "epics": [],

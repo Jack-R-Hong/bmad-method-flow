@@ -179,11 +179,25 @@ impl StepExecutorPlugin for CodingPackPlugin {
         let mut pack_input: CodingPackInput = serde_json::from_value(input_val.clone())
             .map_err(|e| WitPluginError::invalid_input(format!("invalid input: {e}")))?;
 
-        // Allow workspace_dir to be passed via task metadata
+        // Resolve workspace: check input fields, then task metadata,
+        // then fall back to querying the Pulse task's own workspace field.
         if pack_input.workspace_dir.is_none() {
             if let Some(meta) = &task.metadata {
-                if let Some(ws) = meta.get("workspace_dir").and_then(|v| v.as_str()) {
+                let ws = meta
+                    .get("workspace_dir")
+                    .or_else(|| meta.get("workspace"))
+                    .or_else(|| meta.get("workspace_path"))
+                    .and_then(|v| v.as_str());
+                if let Some(ws) = ws {
                     pack_input.workspace_dir = Some(ws.to_string());
+                }
+            }
+        }
+        // Last resort: fetch the task record from Pulse API to read its workspace.
+        if pack_input.workspace.is_none() && task.task_id != "__probe__" {
+            if let Ok(pulse_task) = pulse_api::get_task(&task.task_id) {
+                if !pulse_task.workspace_id.is_empty() {
+                    pack_input.workspace = Some(pulse_task.workspace_id);
                 }
             }
         }

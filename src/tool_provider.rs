@@ -464,6 +464,7 @@ impl ToolProvider for BmadToolProvider {
             endpoint,
             payload,
             workspace_dir: Some(self.config.base_dir.to_string_lossy().to_string()),
+            workspace: None,
         };
 
         pack::execute_action(&input)

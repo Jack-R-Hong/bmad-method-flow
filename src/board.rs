@@ -638,14 +638,20 @@ pub fn get_task_detail_from_pulse(task_id: &str) -> Result<serde_json::Value, Wi
 }
 
 /// Get full board data for the Kanban view.
-pub fn get_board_data(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+/// `workspace` is the Pulse workspace name for task filtering (None = unfiltered).
+pub fn get_board_data(config: &WorkspaceConfig, workspace: Option<&str>) -> Result<serde_json::Value, WitPluginError> {
     // Primary: Pulse Task API with metadata (unified data source)
-    if let Ok(data) = crate::pulse_api::get_board_data() {
+    if let Ok(data) = crate::pulse_api::get_board_data(workspace) {
         if data["items"].as_array().map_or(false, |a| !a.is_empty()) {
             return Ok(data);
         }
+        // When a workspace filter is active, return the (possibly empty) API result
+        // instead of falling through to unfiltered local sources.
+        if workspace.is_some() {
+            return Ok(data);
+        }
     }
-    // Fallback: board-store.json (legacy)
+    // Fallback: board-store.json (legacy, only without workspace filter)
     if crate::board_store::store_exists(&config.base_dir) {
         return crate::board_store::get_board_data_from_store(config);
     }
