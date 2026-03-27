@@ -272,6 +272,7 @@
           { "id": "done", "label": "Done", "color": "#10b981" }
         ],
         "card_fields": ["id", "title", "status", "epic_title", "story_number"],
+        "swimlane_key": "epic_id",
         "status_field": "status",
         "card_detail_endpoint": "board/assignments/{id}"
       }

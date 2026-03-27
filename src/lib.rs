@@ -1,11 +1,13 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agent_registry;
+pub mod auto_dev;
 pub mod board;
 pub mod board_store;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config_injector;
 pub mod executor;
 pub mod pack;
+pub mod pulse_api;
 pub mod test_parser;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tool_provider;

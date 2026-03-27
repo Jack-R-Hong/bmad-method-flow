@@ -1,9 +1,9 @@
 ---
 stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
 lastStep: 8
-status: 'complete'
+status: 'in-progress'
 completedAt: '2026-03-23'
-lastUpdated: '2026-03-23'
+lastUpdated: '2026-03-27'
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture-v1.md'
@@ -707,6 +707,212 @@ echo '{"action": "generate-agents-yaml"}' | ./target/release/plugin-coding-pack
 - Exact system prompt text for each BMAD agent persona (content, not architecture)
 - Provider-claude-code's handling of new `mcp_config` and `env_vars` fields (upstream dependency)
 - Session step YAML schema validation rules (implementation detail for `validator.rs`)
+
+---
+
+## Auto-Dev Loop — Board-Driven Autonomous Execution
+
+_Added 2026-03-27. Extends the existing architecture to close the gap between the board/task system and the workflow executor, enabling fully autonomous agent-driven development._
+
+### Problem Statement
+
+The board system (`board_store.rs`) and workflow executor (`executor.rs`) are architecturally disconnected. Tasks can be created on the board and workflows can be triggered, but there is no automated path from "task is ready-for-dev" to "workflow runs" to "board reflects results." All orchestration is manual.
+
+**Goal:** Enable an end-to-end autonomous development loop:
+
+```
+Board Task (ready-for-dev) → Pick Task → Run Workflow → Run Tests → Update Board → Pick Next
+```
+
+### Decision 8: Auto-Dev Orchestration Model — Hybrid (Single-Shot + Watch)
+
+- **Decision:** Implement two new actions in `pack.rs`:
+  1. `auto-dev-next` — picks one `ready-for-dev` task from the board, executes the appropriate workflow, updates the board with results. Returns JSON with task_id, workflow_id, outcome, and test results.
+  2. `auto-dev-watch` — loops `auto-dev-next` continuously until no `ready-for-dev` tasks remain or a configurable max iterations is reached.
+- **Rationale:** The single-shot `auto-dev-next` is deterministic and testable — an E2E test can create a task, call `auto-dev-next`, and verify the board was updated. The watch loop is a thin wrapper for production use. This avoids async complexity (no task queue, no event system) and fits the existing sync execution model.
+- **Task Selection Strategy:** Pick the highest-priority `ready-for-dev` assignment. Priority order: `critical` > `high` > `medium` > `low`. Within same priority, pick the oldest (first in array).
+- **Implementation sketch:**
+
+```rust
+// src/auto_dev.rs (new module)
+
+pub struct AutoDevResult {
+    pub task_id: String,
+    pub workflow_id: String,
+    pub outcome: AutoDevOutcome,
+    pub test_passed: bool,
+    pub comment: String,
+}
+
+pub enum AutoDevOutcome {
+    Success,       // workflow completed, tests passed → status: "review"
+    TestFailure,   // workflow completed, tests failed → status: "in-progress" + comment
+    WorkflowError, // workflow failed → status: "backlog" + error comment
+}
+
+pub fn auto_dev_next(config: &WorkspaceConfig) -> Result<Option<AutoDevResult>, WitPluginError> {
+    // 1. Query board for ready-for-dev tasks
+    // 2. Pick highest priority task
+    // 3. Set status → "in-progress", add start comment
+    // 4. Resolve workflow_id from task
+    // 5. Execute workflow with task description as input
+    // 6. Run validation (cargo test / npm test)
+    // 7. Update board based on outcome
+    // 8. Return result
+}
+
+pub fn auto_dev_watch(
+    config: &WorkspaceConfig,
+    max_iterations: Option<u32>,
+) -> Result<Vec<AutoDevResult>, WitPluginError> {
+    let max = max_iterations.unwrap_or(10);
+    let mut results = Vec::new();
+    for _ in 0..max {
+        match auto_dev_next(config)? {
+            Some(result) => results.push(result),
+            None => break, // no more ready-for-dev tasks
+        }
+    }
+    Ok(results)
+}
+```
+
+- **Affects:** `src/auto_dev.rs` (new), `src/pack.rs` (new actions), `src/lib.rs` (step dispatch)
+
+### Decision 9: Task-to-Workflow Mapping — Convention + Explicit Override
+
+- **Decision:** The workflow to run for a task is determined by:
+  1. **Explicit override:** If the assignment has a `workflow_id` field (new optional field on `StoreAssignment`), use it directly.
+  2. **Label convention:** If no explicit workflow_id, check labels: `"story"` → `coding-story-dev`, `"bug"` → `coding-bug-fix`, `"refactor"` → `coding-refactor`, `"quick"` → `coding-quick-dev`, `"feature"` → `coding-feature-dev`.
+  3. **Default:** If no matching label, use `coding-quick-dev` (fastest, most general).
+- **Rationale:** Labels are already on assignments and require no schema migration. Explicit `workflow_id` override handles edge cases where the convention doesn't fit. Default to `coding-quick-dev` because it's the lightest workflow and most forgiving for ad-hoc tasks.
+- **Implementation:**
+
+```rust
+fn resolve_workflow_id(assignment: &StoreAssignment) -> &str {
+    // 1. Check explicit workflow_id field
+    if let Some(wf) = &assignment.workflow_id {
+        if !wf.is_empty() { return wf; }
+    }
+    // 2. Check labels for convention mapping
+    for label in &assignment.labels {
+        match label.as_str() {
+            "story" => return "coding-story-dev",
+            "bug" => return "coding-bug-fix",
+            "refactor" => return "coding-refactor",
+            "quick" => return "coding-quick-dev",
+            "feature" => return "coding-feature-dev",
+            "review" => return "coding-review",
+            _ => {}
+        }
+    }
+    // 3. Default
+    "coding-quick-dev"
+}
+```
+
+- **Schema change:** Add optional `workflow_id: String` to `StoreAssignment` with `#[serde(default)]`. Backward compatible — existing board-store.json files without this field continue to work.
+- **Affects:** `src/board_store.rs` (field addition), `src/auto_dev.rs` (routing logic)
+
+### Decision 10: Board State Machine Integration — Bookend Updates with Comments
+
+- **Decision:** The auto-dev loop updates the board at three points:
+  1. **Before execution:** Set assignment status to `in-progress`. Add comment: `"[auto-dev] Starting workflow '{workflow_id}' at {timestamp}"`.
+  2. **After success (tests pass):** Set status to `review`. Add comment: `"[auto-dev] Workflow completed. Tests passed. Ready for review."` with workflow output summary.
+  3. **After failure:** Keep status as `in-progress` (test failure) or revert to `backlog` (workflow error). Add comment with error details: `"[auto-dev] Tests failed: {failure_summary}"` or `"[auto-dev] Workflow error: {error_message}"`.
+- **Rationale:** Bookend updates are simple and give full visibility into what happened. Comments create an audit trail. Using `in-progress` for test failures (not `backlog`) keeps the task visible as actively being worked on — a retry or manual fix can continue from where the agent left off.
+- **State transitions:**
+
+```
+ready-for-dev → [auto-dev picks up] → in-progress
+in-progress   → [workflow + tests pass] → review
+in-progress   → [tests fail] → in-progress (+ failure comment)
+in-progress   → [workflow error] → backlog (+ error comment)
+```
+
+- **Affects:** `src/auto_dev.rs` (state updates via `board_store` functions)
+
+### Decision 11: Validation Gate — Test Execution as Quality Gate
+
+- **Decision:** After the workflow completes, `auto-dev-next` runs a validation step before marking the task as done:
+  1. Detect project type: check for `Cargo.toml` (Rust), `package.json` (Node), `pyproject.toml` (Python)
+  2. Run appropriate test command: `cargo test`, `npm test`, `pytest`
+  3. Parse test output using existing `test_parser::parse_test_output()`
+  4. If tests pass: proceed to success path
+  5. If tests fail: add failure details to board comment, optionally trigger retry
+- **Rationale:** The existing `test_parser.rs` already handles Cargo, Jest, Pytest, and JUnit XML output parsing. Reusing it provides consistent test result extraction. The validation gate is what makes auto-dev trustworthy — without it, agents could "complete" tasks with broken code.
+- **Retry behavior:** If `auto_dev_config.max_retries` > 0 (default: 1), the auto-dev loop re-invokes the workflow with the test failure output appended to the input, giving the agent a chance to self-correct. This mirrors the existing `retry` mechanism in `coding-story-dev.yaml`.
+- **Configuration:**
+
+```rust
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AutoDevConfig {
+    /// Maximum retries on test failure (default: 1)
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    /// Maximum tasks to process in watch mode (default: 10)
+    #[serde(default = "default_max_tasks")]
+    pub max_tasks: u32,
+    /// Skip validation gate (not recommended)
+    #[serde(default)]
+    pub skip_validation: bool,
+}
+```
+
+- **Affects:** `src/auto_dev.rs` (validation logic), `src/workspace.rs` (config section), reuses `src/test_parser.rs`
+
+### Decision Impact Analysis — Auto-Dev Loop
+
+**Implementation Sequence:**
+1. `src/board_store.rs` — Add `workflow_id` field to `StoreAssignment` (trivial, backward compatible)
+2. `src/workspace.rs` — Add `AutoDevConfig` section (follows existing pattern)
+3. `src/auto_dev.rs` — Core logic: task selection, workflow routing, execution, validation, board updates
+4. `src/pack.rs` — Register `auto-dev-next` and `auto-dev-watch` actions
+5. `src/tool_provider.rs` — Expose `bmad_auto_dev_next` as LLM-callable tool
+6. E2E test — Create task, run `auto-dev-next`, verify board updated
+
+**Cross-Component Dependencies:**
+- `auto_dev.rs` depends on: `board_store` (task CRUD), `executor` (workflow execution), `test_parser` (validation), `workspace` (config)
+- `pack.rs` gains two new action branches
+- `tool_provider.rs` gains one new tool (optional — allows LLM agents to trigger auto-dev)
+- No changes to existing workflow YAML files required
+- No changes to dashboard manifest required (board already displays assignments)
+
+**E2E Test Design:**
+
+```rust
+#[test]
+fn auto_dev_next_picks_task_runs_workflow_updates_board() {
+    let dir = tempfile::tempdir().unwrap();
+    // 1. Create a board store with one ready-for-dev task
+    // 2. Place a simple test workflow YAML in config/workflows/
+    // 3. Call auto_dev_next()
+    // 4. Assert: task status changed to "review" or "in-progress"
+    // 5. Assert: comment added with workflow results
+    // 6. Assert: no ready-for-dev tasks remain
+}
+```
+
+### Architecture Validation — Auto-Dev Decisions
+
+**Coherence with Existing Architecture:**
+- Decisions 8-11 build on top of Decisions 1-7 without modifying them
+- `auto_dev.rs` uses the same `execute_workflow_with_config()` entry point as `pack.rs`
+- Board updates use existing `board_store` CRUD functions (no new persistence layer)
+- Validation reuses `test_parser.rs` (no duplicate test parsing logic)
+- Config follows the `#[serde(default)]` optional pattern from Decision workspace config
+
+**Requirements Coverage:**
+- FR-AUTO-1: Auto-dev loop picks ready-for-dev tasks → Decision 8
+- FR-AUTO-2: Task-to-workflow routing → Decision 9
+- FR-AUTO-3: Board state transitions → Decision 10
+- FR-AUTO-4: Test validation gate → Decision 11
+- FR-AUTO-5: LLM-callable auto-dev trigger → Decision 8 (tool_provider extension)
+
+**Known Limitations:**
+- Auto-dev requires all workflow plugins to be installed (provider-claude-code, bmad-method, etc.)
+- Watch mode is synchronous — one task at a time (parallel execution is a future enhancement)
+- No inter-task dependency awareness (tasks are picked independently by priority)
 
 ### Architecture Completeness Checklist
 

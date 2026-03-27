@@ -131,12 +131,23 @@ fn registry_tool_sensitivity_correct() {
     let registry = build_test_registry();
     let tools = registry.collect_tools("claude-code", "default", &InjectionQuery::new());
 
+    let low_tools = [
+        "bmad_validate_pack",
+        "bmad_list_workflows",
+        "bmad_list_plugins",
+        "bmad_data_query",
+        "bmad_board_list",
+    ];
+    let high_tools = ["bmad_auto_dev_next"];
+
     for tool in &tools {
         if tool.name.starts_with("bmad_") {
-            let expected = if tool.name == "bmad_data_mutate" {
-                ToolSensitivity::Medium
-            } else {
+            let expected = if low_tools.contains(&tool.name.as_str()) {
                 ToolSensitivity::Low
+            } else if high_tools.contains(&tool.name.as_str()) {
+                ToolSensitivity::High
+            } else {
+                ToolSensitivity::Medium
             };
             assert_eq!(
                 tool.sensitivity, expected,

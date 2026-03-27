@@ -86,6 +86,15 @@ pub struct BoardItem {
     pub stories_done: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress_pct: Option<f64>,
+    // Assignment-only fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -481,10 +490,183 @@ fn parse_story_section(lines: &[&str], i: &mut usize) -> StoryMetadata {
 
 // ── Public query functions ───────────────────────────────────────────────────
 
+/// Map Pulse task state to board column status.
+fn pulse_state_to_board_status(state: &str) -> &'static str {
+    match state {
+        "Pending" => "backlog",
+        "Running" => "in-progress",
+        "Completed" => "done",
+        "Failed" => "backlog",
+        "Skipped" => "done",
+        "HumanReview" | "AwaitingReview" => "review",
+        "ReQueued" | "AwaitingHuman" => "ready-for-dev",
+        _ => "backlog",
+    }
+}
+
+/// Fetch tasks from Pulse API and return as board data.
+pub fn get_board_data_from_pulse_tasks() -> Result<serde_json::Value, WitPluginError> {
+    let port = std::env::var("PULSE_API_PORT").unwrap_or_else(|_| "8080".to_string());
+    let url = format!("http://127.0.0.1:{}/api/v1/tasks?limit=200", port);
+
+    let body = reqwest::blocking::get(&url)
+        .map_err(|e| WitPluginError::internal(format!("Failed to fetch tasks: {e}")))?
+        .text()
+        .map_err(|e| WitPluginError::internal(format!("Failed to read tasks response: {e}")))?;
+
+    let resp: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| WitPluginError::internal(format!("Invalid tasks JSON: {e}")))?;
+
+    let tasks = resp["items"].as_array().ok_or_else(|| {
+        WitPluginError::internal("Tasks response missing 'items' array".to_string())
+    })?;
+
+    let items: Vec<BoardItem> = tasks
+        .iter()
+        .map(|t| {
+            let state = t["state"].as_str().unwrap_or("Pending");
+            let status = pulse_state_to_board_status(state).to_string();
+            let workflow = t["workflow_id"].as_str().unwrap_or("").to_string();
+            let step = t["step_id"].as_str().unwrap_or("").to_string();
+            let id = t["id"].as_str().unwrap_or("").to_string();
+            let short_id = if id.len() > 8 { &id[..8] } else { &id };
+            let title = format!("{} / {}", workflow, step);
+
+            BoardItem {
+                id: id.clone(),
+                item_type: "task".to_string(),
+                title,
+                status,
+                phase: 0,
+                epic_id: workflow,
+                epic_title: Some(state.to_string()),
+                story_number: Some(short_id.to_string()),
+                story_count: None,
+                stories_done: None,
+                progress_pct: None,
+                comment_count: None,
+                labels: None,
+                description: None,
+                assignee: None,
+            }
+        })
+        .collect();
+
+    let total = items.len();
+    let done = items.iter().filter(|i| i.status == "done").count();
+    let in_progress = items.iter().filter(|i| i.status == "in-progress").count();
+    let review = items.iter().filter(|i| i.status == "review").count();
+    let ready = items.iter().filter(|i| i.status == "ready-for-dev").count();
+    let backlog = items.iter().filter(|i| i.status == "backlog").count();
+    let progress_pct = if total > 0 {
+        ((done as f64 / total as f64) * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+
+    let data = BoardData {
+        project: "Pulse".to_string(),
+        last_updated: String::new(),
+        phases: vec![],
+        summary: BoardSummary {
+            total_epics: 0,
+            total_stories: total,
+            done_epics: 0,
+            done_stories: done,
+            in_progress_stories: in_progress,
+            ready_stories: ready,
+            backlog_stories: backlog,
+            review_stories: review,
+            progress_pct,
+        },
+        items,
+    };
+
+    serde_json::to_value(&data)
+        .map_err(|e| WitPluginError::internal(format!("JSON serialization error: {e}")))
+}
+
+/// Fetch single task detail from Pulse API.
+pub fn get_task_detail_from_pulse(task_id: &str) -> Result<serde_json::Value, WitPluginError> {
+    let port = std::env::var("PULSE_API_PORT").unwrap_or_else(|_| "8080".to_string());
+    let url = format!("http://127.0.0.1:{}/api/v1/tasks/{}", port, task_id);
+
+    let body = reqwest::blocking::get(&url)
+        .map_err(|e| WitPluginError::internal(format!("Failed to fetch task: {e}")))?
+        .text()
+        .map_err(|e| WitPluginError::internal(format!("Failed to read task response: {e}")))?;
+
+    let task: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| WitPluginError::internal(format!("Invalid task JSON: {e}")))?;
+
+    let state = task["state"].as_str().unwrap_or("Pending");
+    let workflow = task["workflow_id"].as_str().unwrap_or("");
+    let step = task["step_id"].as_str().unwrap_or("");
+
+    // Build timeline as comments
+    let timeline = task["timeline"].as_array();
+    let comments: Vec<serde_json::Value> = timeline
+        .map(|tl| {
+            tl.iter()
+                .map(|entry| {
+                    serde_json::json!({
+                        "id": format!("tl-{}", entry["timestamp"].as_str().unwrap_or("")),
+                        "author": "Pulse",
+                        "content": format!("State → {}", entry["state"].as_str().unwrap_or("?")),
+                        "timestamp": entry["timestamp"].as_str().unwrap_or(""),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(serde_json::json!({
+        "id": task["id"],
+        "title": format!("{} / {}", workflow, step),
+        "status": pulse_state_to_board_status(state),
+        "description": format!("Workflow: {}\nStep: {}\nState: {}", workflow, step, state),
+        "assignee": workflow,
+        "priority": state,
+        "labels": [workflow, step],
+        "task_progress": format!("{}", state),
+        "tasks": [],
+        "comments": comments,
+        "created_at": task["created_at"],
+        "started_at": task["started_at"],
+        "completed_at": task["completed_at"],
+    }))
+}
+
 /// Get full board data for the Kanban view.
 pub fn get_board_data(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    // Primary: Pulse Task API with metadata (unified data source)
+    if let Ok(data) = crate::pulse_api::get_board_data() {
+        if data["items"].as_array().map_or(false, |a| !a.is_empty()) {
+            return Ok(data);
+        }
+    }
+    // Fallback: board-store.json (legacy)
     if crate::board_store::store_exists(&config.base_dir) {
         return crate::board_store::get_board_data_from_store(config);
+    }
+    // If no board store, try sprint-status.yaml for backward compatibility.
+    // Only use it if assignments are not the primary board mode.
+    // When board-store.json has been used before (synced_from exists in output dir),
+    // return empty rather than falling back to YAML.
+    if config.base_dir.join("_bmad-output").exists() {
+        return Ok(serde_json::json!({
+            "project": "",
+            "last_updated": "",
+            "phases": [],
+            "summary": {
+                "total_epics": 0, "total_stories": 0,
+                "done_epics": 0, "done_stories": 0,
+                "in_progress_stories": 0, "ready_stories": 0,
+                "backlog_stories": 0, "review_stories": 0,
+                "progress_pct": 0.0
+            },
+            "items": []
+        }));
     }
     let (epics, project, last_updated) = parse_sprint_status(&config.base_dir)?;
     let md_metadata = parse_epics_markdown(&config.base_dir);
@@ -514,6 +696,10 @@ pub fn get_board_data(config: &WorkspaceConfig) -> Result<serde_json::Value, Wit
             story_count: Some(total),
             stories_done: Some(done_count),
             progress_pct: Some((pct * 10.0).round() / 10.0),
+            comment_count: None,
+            labels: None,
+            description: None,
+            assignee: None,
         });
 
         // Build story items
@@ -537,6 +723,10 @@ pub fn get_board_data(config: &WorkspaceConfig) -> Result<serde_json::Value, Wit
                 story_count: None,
                 stories_done: None,
                 progress_pct: None,
+                comment_count: None,
+                labels: None,
+                description: None,
+                assignee: None,
             });
         }
     }
@@ -963,16 +1153,14 @@ mod tests {
 
     #[test]
     fn test_get_board_data_from_real_files() {
-        // This test reads the actual sprint-status.yaml in the repo
+        // This test reads the actual sprint-status.yaml in the repo,
+        // bypassing Pulse API and store fallback to test the YAML parser.
         let config = WorkspaceConfig::resolve(None);
-        let result = get_board_data(&config);
-        assert!(result.is_ok(), "get_board_data failed: {:?}", result.err());
-
-        let data = result.unwrap();
-        assert_eq!(data["project"], "bmad-method-flow");
-        assert!(data["summary"]["total_epics"].as_u64().unwrap() >= 21);
-        assert!(data["summary"]["total_stories"].as_u64().unwrap() > 0);
-        assert!(data["items"].as_array().unwrap().len() > 21); // epics + stories
+        let (epics, project, _last_updated) = parse_sprint_status(&config.base_dir).unwrap();
+        assert_eq!(project, "bmad-method-flow");
+        assert!(epics.len() >= 21);
+        let total_stories: usize = epics.iter().map(|e| e.stories.len()).sum();
+        assert!(total_stories > 0);
     }
 
     #[test]

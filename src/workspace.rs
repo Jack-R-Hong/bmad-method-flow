@@ -18,6 +18,8 @@ pub struct WorkspaceConfig {
     /// When true, the executor skips the two-stage persona fetch and lets
     /// the injection pipeline (BmadAgentInjector) compose system prompts.
     pub use_injection_pipeline: bool,
+    /// Auto-dev loop settings.
+    pub auto_dev: AutoDevConfig,
 }
 
 /// Controls which workflows are available in this workspace.
@@ -56,6 +58,37 @@ pub struct MemorySettings {
     pub auto_reindex: Option<bool>,
 }
 
+/// Auto-dev loop configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutoDevConfig {
+    /// Maximum retries on test failure (default: 1)
+    #[serde(default = "default_auto_dev_retries")]
+    pub max_retries: u32,
+    /// Maximum tasks to process in watch mode (default: 10)
+    #[serde(default = "default_auto_dev_max_tasks")]
+    pub max_tasks: u32,
+    /// Skip validation gate (not recommended)
+    #[serde(default)]
+    pub skip_validation: bool,
+}
+
+impl Default for AutoDevConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: default_auto_dev_retries(),
+            max_tasks: default_auto_dev_max_tasks(),
+            skip_validation: false,
+        }
+    }
+}
+
+fn default_auto_dev_retries() -> u32 {
+    1
+}
+fn default_auto_dev_max_tasks() -> u32 {
+    10
+}
+
 /// Raw YAML structure matching config/config.yaml, extended with workspace fields.
 #[derive(Debug, Deserialize)]
 struct ConfigYaml {
@@ -77,6 +110,9 @@ struct ConfigYaml {
     /// When true, skip persona fetch and let the injection pipeline handle system prompts
     #[serde(default)]
     use_injection_pipeline: Option<bool>,
+    /// Auto-dev loop settings
+    #[serde(default)]
+    auto_dev: Option<AutoDevConfig>,
 }
 
 const DEFAULT_PLUGINS_DIR: &str = "config/plugins";
@@ -119,6 +155,7 @@ impl WorkspaceConfig {
                     workflows: yaml.workflows.unwrap_or_default(),
                     defaults,
                     use_injection_pipeline: yaml.use_injection_pipeline.unwrap_or(false),
+                    auto_dev: yaml.auto_dev.unwrap_or_default(),
                 };
             }
         }
@@ -136,11 +173,12 @@ impl WorkspaceConfig {
             workflows: WorkflowFilter::default(),
             defaults: DefaultSettings::default(),
             use_injection_pipeline: false,
+            auto_dev: AutoDevConfig::default(),
         }
     }
 
     /// Resolve workspace config from an optional workspace_dir override.
-    /// Priority: workspace_dir arg > PULSE_WORKSPACE_DIR env > "."
+    /// Priority: workspace_dir arg > PULSE_WORKSPACE_DIR env > inferred from binary path > "."
     pub fn resolve(workspace_dir: Option<&str>) -> Self {
         if let Some(dir) = workspace_dir {
             return Self::from_base_dir(dir);
@@ -150,6 +188,24 @@ impl WorkspaceConfig {
         if let Ok(dir) = std::env::var("PULSE_WORKSPACE_DIR") {
             if !dir.is_empty() {
                 return Self::from_base_dir(dir);
+            }
+        }
+
+        // Infer workspace from binary location: if the binary lives at
+        // {workspace}/config/plugins/plugin-coding-pack, use {workspace}.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(plugins_dir) = exe.parent() {
+                if plugins_dir.ends_with("config/plugins") {
+                    if let Some(workspace) = plugins_dir.parent().and_then(|p| p.parent()) {
+                        let ws = workspace.to_path_buf();
+                        if ws.join("config/config.yaml").exists()
+                            || ws.join("config/workflows").exists()
+                        {
+                            return Self::from_base_dir(ws);
+                        }
+                    }
+                }
             }
         }
 
@@ -336,5 +392,21 @@ use_injection_pipeline: true
 "#;
         let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(parsed.use_injection_pipeline, Some(true));
+    }
+
+    #[test]
+    fn test_auto_dev_config_parsed_custom_values() {
+        let yaml = r#"
+plugin_dir: "config/plugins"
+auto_dev:
+  max_retries: 3
+  max_tasks: 5
+  skip_validation: true
+"#;
+        let parsed: ConfigYaml = serde_yaml::from_str(yaml).unwrap();
+        let auto_dev = parsed.auto_dev.expect("auto_dev should be present");
+        assert_eq!(auto_dev.max_retries, 3);
+        assert_eq!(auto_dev.max_tasks, 5);
+        assert!(auto_dev.skip_validation);
     }
 }

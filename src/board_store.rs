@@ -46,6 +46,9 @@ pub struct StoreAssignment {
     pub tasks: Vec<SubTask>,
     #[serde(default)]
     pub comments: Vec<Comment>,
+    /// Explicit workflow ID override for auto-dev. If empty, resolved from labels.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workflow_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +267,10 @@ pub fn get_board_data_from_store(
                 story_count: Some(total_tasks),
                 stories_done: Some(done_tasks),
                 progress_pct: task_progress,
+                comment_count: Some(a.comments.len()),
+                labels: if a.labels.is_empty() { None } else { Some(a.labels.clone()) },
+                description: if a.description.is_empty() { None } else { Some(a.description.clone()) },
+                assignee: if a.assignee.is_empty() { None } else { Some(a.assignee.clone()) },
             }
         })
         .collect();
@@ -870,6 +877,268 @@ pub fn update_story(
     )))
 }
 
+// ── Assignment CRUD ─────────────────────────────────────────────────────────
+
+/// Ensure store exists (create empty if not).
+fn ensure_store(base_dir: &Path) -> Result<BoardStore, WitPluginError> {
+    if store_exists(base_dir) {
+        load_store(base_dir)
+    } else {
+        let store = BoardStore {
+            version: 1,
+            project: "pulse".to_string(),
+            last_updated: today_string(),
+            synced_from: None,
+            epics: vec![],
+            assignments: vec![],
+        };
+        save_store(base_dir, &store)?;
+        Ok(store)
+    }
+}
+
+/// Create a new assignment (task card on the board).
+pub fn create_assignment(
+    base_dir: &Path,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, WitPluginError> {
+    let title = payload
+        .get("title")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| WitPluginError::invalid_input("'title' field required"))?;
+
+    let status = payload
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("backlog");
+    validate_status(status)?;
+
+    let mut store = ensure_store(base_dir)?;
+
+    // Auto-generate ID from title slug + counter
+    let slug = title_to_slug(title);
+    let next_num = store.assignments.len() + 1;
+    let id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("task-{}-{}", next_num, slug));
+
+    let assignment = StoreAssignment {
+        id: id.clone(),
+        title: title.to_string(),
+        status: status.to_string(),
+        description: payload
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        assignee: payload
+            .get("assignee")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        priority: payload
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .unwrap_or("medium")
+            .to_string(),
+        labels: payload
+            .get("labels")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        tasks: payload
+            .get("tasks")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .enumerate()
+                    .filter_map(|(i, v)| {
+                        v.as_str().map(|s| SubTask {
+                            id: format!("st-{}", i + 1),
+                            title: s.to_string(),
+                            done: false,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        comments: vec![],
+        workflow_id: payload
+            .get("workflow_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    };
+
+    let result = serde_json::to_value(&assignment)
+        .map_err(|e| WitPluginError::internal(format!("JSON error: {e}")))?;
+    store.assignments.push(assignment);
+    store.last_updated = today_string();
+    save_store(base_dir, &store)?;
+    Ok(result)
+}
+
+/// Update an existing assignment's fields.
+pub fn update_assignment(
+    base_dir: &Path,
+    assignment_id: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, WitPluginError> {
+    let mut store = load_store(base_dir)?;
+    let assignment = store
+        .assignments
+        .iter_mut()
+        .find(|a| a.id == assignment_id)
+        .ok_or_else(|| {
+            WitPluginError::not_found(format!("Assignment '{assignment_id}' not found"))
+        })?;
+
+    if let Some(title) = payload.get("title").and_then(|v| v.as_str()) {
+        assignment.title = title.to_string();
+    }
+    if let Some(status) = payload.get("status").and_then(|v| v.as_str()) {
+        validate_status(status)?;
+        assignment.status = status.to_string();
+    }
+    if let Some(desc) = payload.get("description").and_then(|v| v.as_str()) {
+        assignment.description = desc.to_string();
+    }
+    if let Some(assignee) = payload.get("assignee").and_then(|v| v.as_str()) {
+        assignment.assignee = assignee.to_string();
+    }
+    if let Some(priority) = payload.get("priority").and_then(|v| v.as_str()) {
+        assignment.priority = priority.to_string();
+    }
+    if let Some(labels) = payload.get("labels").and_then(|v| v.as_array()) {
+        assignment.labels = labels
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+    }
+
+    let result = serde_json::to_value(&*assignment)
+        .map_err(|e| WitPluginError::internal(format!("JSON error: {e}")))?;
+    store.last_updated = today_string();
+    save_store(base_dir, &store)?;
+    Ok(result)
+}
+
+/// Add a comment to an assignment.
+pub fn add_comment(
+    base_dir: &Path,
+    assignment_id: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, WitPluginError> {
+    let content = payload
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| WitPluginError::invalid_input("'content' field required"))?;
+    let author = payload
+        .get("author")
+        .and_then(|v| v.as_str())
+        .unwrap_or("LLM Agent");
+
+    let mut store = load_store(base_dir)?;
+    let assignment = store
+        .assignments
+        .iter_mut()
+        .find(|a| a.id == assignment_id)
+        .ok_or_else(|| {
+            WitPluginError::not_found(format!("Assignment '{assignment_id}' not found"))
+        })?;
+
+    let comment_num = assignment.comments.len() + 1;
+    let comment = Comment {
+        id: format!("comment-{}", comment_num),
+        author: author.to_string(),
+        content: content.to_string(),
+        timestamp: today_string(),
+    };
+
+    let result = serde_json::to_value(&comment)
+        .map_err(|e| WitPluginError::internal(format!("JSON error: {e}")))?;
+    assignment.comments.push(comment);
+    store.last_updated = today_string();
+    save_store(base_dir, &store)?;
+    Ok(result)
+}
+
+/// Add a sub-task to an assignment.
+pub fn add_subtask(
+    base_dir: &Path,
+    assignment_id: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, WitPluginError> {
+    let title = payload
+        .get("title")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| WitPluginError::invalid_input("'title' field required"))?;
+
+    let mut store = load_store(base_dir)?;
+    let assignment = store
+        .assignments
+        .iter_mut()
+        .find(|a| a.id == assignment_id)
+        .ok_or_else(|| {
+            WitPluginError::not_found(format!("Assignment '{assignment_id}' not found"))
+        })?;
+
+    let st_num = assignment.tasks.len() + 1;
+    let subtask = SubTask {
+        id: format!("st-{}", st_num),
+        title: title.to_string(),
+        done: false,
+    };
+
+    let result = serde_json::to_value(&subtask)
+        .map_err(|e| WitPluginError::internal(format!("JSON error: {e}")))?;
+    assignment.tasks.push(subtask);
+    store.last_updated = today_string();
+    save_store(base_dir, &store)?;
+    Ok(result)
+}
+
+/// Toggle a sub-task's done status.
+pub fn toggle_subtask(
+    base_dir: &Path,
+    assignment_id: &str,
+    subtask_id: &str,
+) -> Result<serde_json::Value, WitPluginError> {
+    let mut store = load_store(base_dir)?;
+    let assignment = store
+        .assignments
+        .iter_mut()
+        .find(|a| a.id == assignment_id)
+        .ok_or_else(|| {
+            WitPluginError::not_found(format!("Assignment '{assignment_id}' not found"))
+        })?;
+
+    let subtask = assignment
+        .tasks
+        .iter_mut()
+        .find(|t| t.id == subtask_id)
+        .ok_or_else(|| {
+            WitPluginError::not_found(format!("Subtask '{subtask_id}' not found"))
+        })?;
+
+    subtask.done = !subtask.done;
+
+    let result = serde_json::json!({
+        "id": subtask.id,
+        "title": subtask.title,
+        "done": subtask.done,
+    });
+    store.last_updated = today_string();
+    save_store(base_dir, &store)?;
+    Ok(result)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1117,5 +1386,623 @@ mod tests {
         let today = today_string();
         assert!(today.len() == 10, "expected YYYY-MM-DD, got: {today}");
         assert!(today.contains('-'));
+    }
+
+    // ── Helper with assignments ──────────────────────────────────────────
+
+    fn test_store_with_assignments() -> BoardStore {
+        let mut store = test_store();
+        store.assignments = vec![
+            StoreAssignment {
+                id: "task-1-setup".to_string(),
+                title: "Setup CI".to_string(),
+                status: "in-progress".to_string(),
+                description: "Configure CI pipeline".to_string(),
+                assignee: "dev-1".to_string(),
+                priority: "high".to_string(),
+                labels: vec!["infra".to_string()],
+                tasks: vec![
+                    SubTask {
+                        id: "st-1".to_string(),
+                        title: "Add Dockerfile".to_string(),
+                        done: true,
+                    },
+                    SubTask {
+                        id: "st-2".to_string(),
+                        title: "Add CI config".to_string(),
+                        done: false,
+                    },
+                ],
+                comments: vec![Comment {
+                    id: "comment-1".to_string(),
+                    author: "LLM Agent".to_string(),
+                    content: "Started work".to_string(),
+                    timestamp: "2026-03-27".to_string(),
+                }],
+                workflow_id: String::new(),
+            },
+            StoreAssignment {
+                id: "task-2-tests".to_string(),
+                title: "Write Tests".to_string(),
+                status: "done".to_string(),
+                description: "Add unit tests".to_string(),
+                assignee: "dev-2".to_string(),
+                priority: "medium".to_string(),
+                labels: vec!["testing".to_string()],
+                tasks: vec![],
+                comments: vec![],
+                workflow_id: String::new(),
+            },
+        ];
+        store
+    }
+
+    // ── Assignment CRUD tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_create_assignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let result = create_assignment(
+            base,
+            &serde_json::json!({
+                "title": "New Task",
+                "description": "Do something",
+                "assignee": "dev-1",
+                "priority": "high",
+                "labels": ["bug", "urgent"],
+                "tasks": ["subtask A", "subtask B"]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(result["title"], "New Task");
+        assert_eq!(result["status"], "backlog");
+        assert_eq!(result["priority"], "high");
+        assert_eq!(result["labels"].as_array().unwrap().len(), 2);
+        assert_eq!(result["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(result["tasks"][0]["id"], "st-1");
+        assert!(!result["tasks"][0]["done"].as_bool().unwrap());
+
+        let loaded = load_store(base).unwrap();
+        assert_eq!(loaded.assignments.len(), 1);
+    }
+
+    #[test]
+    fn test_create_assignment_minimal() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let result = create_assignment(base, &serde_json::json!({"title": "Minimal"})).unwrap();
+        assert_eq!(result["title"], "Minimal");
+        assert_eq!(result["status"], "backlog");
+        assert_eq!(result["priority"], "medium");
+        assert_eq!(result["assignee"], "");
+    }
+
+    #[test]
+    fn test_create_assignment_invalid_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let err = create_assignment(
+            base,
+            &serde_json::json!({"title": "X", "status": "bad"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_input");
+    }
+
+    #[test]
+    fn test_create_assignment_missing_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let err = create_assignment(base, &serde_json::json!({"status": "backlog"})).unwrap_err();
+        assert_eq!(err.code, "invalid_input");
+    }
+
+    #[test]
+    fn test_create_assignment_auto_creates_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        // No store exists yet — ensure_store should create one
+        let result =
+            create_assignment(base, &serde_json::json!({"title": "First Task"})).unwrap();
+        assert_eq!(result["title"], "First Task");
+        assert!(store_exists(base));
+    }
+
+    #[test]
+    fn test_update_assignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let result = update_assignment(
+            base,
+            "task-1-setup",
+            &serde_json::json!({
+                "title": "Updated Title",
+                "status": "review",
+                "priority": "critical"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(result["title"], "Updated Title");
+        assert_eq!(result["status"], "review");
+        assert_eq!(result["priority"], "critical");
+        assert_eq!(result["description"], "Configure CI pipeline"); // unchanged
+    }
+
+    #[test]
+    fn test_update_assignment_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let err =
+            update_assignment(base, "nonexistent", &serde_json::json!({"title": "X"})).unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_update_assignment_invalid_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let err = update_assignment(
+            base,
+            "task-1-setup",
+            &serde_json::json!({"status": "invalid"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_input");
+    }
+
+    // ── Comment tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_add_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let result = add_comment(
+            base,
+            "task-1-setup",
+            &serde_json::json!({"content": "Work in progress", "author": "Jack"}),
+        )
+        .unwrap();
+
+        assert_eq!(result["author"], "Jack");
+        assert_eq!(result["content"], "Work in progress");
+        assert_eq!(result["id"], "comment-2"); // existing has comment-1
+
+        let loaded = load_store(base).unwrap();
+        assert_eq!(loaded.assignments[0].comments.len(), 2);
+    }
+
+    #[test]
+    fn test_add_comment_default_author() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let result = add_comment(
+            base,
+            "task-1-setup",
+            &serde_json::json!({"content": "Auto comment"}),
+        )
+        .unwrap();
+
+        assert_eq!(result["author"], "LLM Agent");
+    }
+
+    #[test]
+    fn test_add_comment_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let err = add_comment(
+            base,
+            "nonexistent",
+            &serde_json::json!({"content": "X"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_add_comment_missing_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let err = add_comment(
+            base,
+            "task-1-setup",
+            &serde_json::json!({"author": "X"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_input");
+    }
+
+    // ── Subtask tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_add_subtask() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let result = add_subtask(
+            base,
+            "task-1-setup",
+            &serde_json::json!({"title": "New subtask"}),
+        )
+        .unwrap();
+
+        assert_eq!(result["title"], "New subtask");
+        assert_eq!(result["id"], "st-3"); // existing has st-1, st-2
+        assert!(!result["done"].as_bool().unwrap());
+
+        let loaded = load_store(base).unwrap();
+        assert_eq!(loaded.assignments[0].tasks.len(), 3);
+    }
+
+    #[test]
+    fn test_add_subtask_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let err = add_subtask(
+            base,
+            "nonexistent",
+            &serde_json::json!({"title": "X"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_toggle_subtask() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        // st-1 starts as done=true, toggle to false
+        let result = toggle_subtask(base, "task-1-setup", "st-1").unwrap();
+        assert!(!result["done"].as_bool().unwrap());
+
+        // Toggle again back to true
+        let result = toggle_subtask(base, "task-1-setup", "st-1").unwrap();
+        assert!(result["done"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_toggle_subtask_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let err = toggle_subtask(base, "task-1-setup", "nonexistent").unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_toggle_subtask_assignment_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+
+        let err = toggle_subtask(base, "nonexistent", "st-1").unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    // ── Store → BoardData conversion tests ───────────────────────────────
+
+    #[test]
+    fn test_get_board_data_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_board_data_from_store(&config).unwrap();
+        let items = data["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(data["summary"]["total_stories"], 2);
+        assert_eq!(data["summary"]["done_stories"], 1);
+        assert_eq!(items[0]["type"], "assignment");
+    }
+
+    #[test]
+    fn test_get_epics_list_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_epics_list_from_store(&config).unwrap();
+        let items = data["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["title"], "Test Epic");
+        assert!(items[0]["progress"].as_str().unwrap().contains("1/2"));
+    }
+
+    #[test]
+    fn test_get_assignments_list_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_assignments_list_from_store(&config).unwrap();
+        let items = data["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["title"], "Setup CI");
+        assert_eq!(items[0]["task_progress"], "1/2");
+        assert_eq!(items[0]["comment_count"], 1);
+        assert_eq!(items[1]["assignee"], "dev-2");
+    }
+
+    #[test]
+    fn test_get_assignment_detail_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_assignment_detail_from_store("task-1-setup", &config).unwrap();
+        assert_eq!(data["title"], "Setup CI");
+        assert_eq!(data["task_progress"], "1/2");
+        assert_eq!(data["task_count"], 2);
+        assert_eq!(data["tasks_done"], 1);
+        assert_eq!(data["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(data["comments"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_get_assignment_detail_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store_with_assignments()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let err = get_assignment_detail_from_store("nonexistent", &config).unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_get_epic_detail_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_epic_detail_from_store("epic-1", &config).unwrap();
+        assert_eq!(data["title"], "Test Epic");
+        assert_eq!(data["story_count"], 2);
+        assert_eq!(data["stories_done"], 1);
+        assert!(data["progress"].as_str().unwrap().contains("1/2"));
+        assert_eq!(data["story_list"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_get_epic_detail_invalid_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let err = get_epic_detail_from_store("bad-id", &config).unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_get_story_detail_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_story_detail_from_store("1-1-first-story", &config).unwrap();
+        assert_eq!(data["title"], "First Story");
+        assert_eq!(data["epic_id"], "epic-1");
+        assert_eq!(data["epic_title"], "Test Epic");
+        assert_eq!(data["user_story"], "As a user...");
+    }
+
+    #[test]
+    fn test_get_story_detail_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let err = get_story_detail_from_store("nonexistent", &config).unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_get_filter_options_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_filter_options_from_store(&config).unwrap();
+        assert_eq!(data["phases"].as_array().unwrap().len(), 3);
+        assert_eq!(data["statuses"].as_array().unwrap().len(), 5);
+        assert_eq!(data["types"].as_array().unwrap().len(), 2);
+        assert_eq!(data["epics"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_get_board_summary_from_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_board_summary_from_store(&config).unwrap();
+        assert_eq!(data["stories_remaining"], 1);
+        assert_eq!(data["progress_pct"], 50.0);
+        assert_eq!(data["sprint_progress"], "at-risk"); // no in-progress/review stories after 1 remaining
+    }
+
+    #[test]
+    fn test_get_board_summary_all_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let mut store = test_store();
+        store.epics[0].stories[1].status = "done".to_string();
+        store.epics[0].status = "done".to_string();
+        save_store(base, &store).unwrap();
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_board_summary_from_store(&config).unwrap();
+        assert_eq!(data["stories_remaining"], 0);
+        assert_eq!(data["progress_pct"], 100.0);
+        assert_eq!(data["sprint_progress"], "on-track");
+    }
+
+    // ── Edge cases ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_status_all_valid() {
+        for status in VALID_STATUSES {
+            assert!(validate_status(status).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_update_epic_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let err = update_epic(base, "epic-999", &serde_json::json!({"title": "X"})).unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_update_story_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let err =
+            update_story(base, "nonexistent", &serde_json::json!({"title": "X"})).unwrap_err();
+        assert_eq!(err.code, "not_found");
+    }
+
+    #[test]
+    fn test_create_epic_with_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let result = create_epic(
+            base,
+            &serde_json::json!({"title": "WIP Epic", "status": "in-progress"}),
+        )
+        .unwrap();
+        assert_eq!(result["status"], "in-progress");
+    }
+
+    #[test]
+    fn test_create_epic_invalid_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let err =
+            create_epic(base, &serde_json::json!({"title": "X", "status": "bad"})).unwrap_err();
+        assert_eq!(err.code, "invalid_input");
+    }
+
+    #[test]
+    fn test_create_story_with_all_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap();
+
+        let result = create_story(
+            base,
+            &serde_json::json!({
+                "epic_id": "epic-1",
+                "title": "Full Story",
+                "status": "ready-for-dev",
+                "user_story": "As a dev...",
+                "acceptance_criteria": "- AC1\n- AC2"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(result["status"], "ready-for-dev");
+        assert_eq!(result["user_story"], "As a dev...");
+        assert_eq!(result["acceptance_criteria"], "- AC1\n- AC2");
+    }
+
+    #[test]
+    fn test_board_data_empty_assignments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        save_store(base, &test_store()).unwrap(); // no assignments
+        let config = WorkspaceConfig {
+            base_dir: base.to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = get_board_data_from_store(&config).unwrap();
+        assert_eq!(data["items"].as_array().unwrap().len(), 0);
+        assert_eq!(data["summary"]["progress_pct"], 0.0);
     }
 }
