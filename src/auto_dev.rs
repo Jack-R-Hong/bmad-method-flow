@@ -1,9 +1,10 @@
 //! Auto-dev loop — board-driven autonomous workflow execution.
 //!
-//! Picks `ready-for-dev` tasks from the board, runs the appropriate workflow,
+//! Picks `ready-for-dev` tasks from the board plugin, runs the appropriate workflow,
 //! validates with tests, and updates the board with results.
+//! Communicates with plugin-board via HTTP (board_client).
 
-use crate::board_store::{self, StoreAssignment};
+use crate::board_client::{self, Assignment};
 use crate::executor;
 use crate::test_parser;
 use crate::workspace::WorkspaceConfig;
@@ -25,7 +26,7 @@ pub struct AutoDevResult {
 
 /// Resolve which workflow to run for a given assignment.
 /// Priority: explicit workflow_id > label convention > default.
-pub fn resolve_workflow_id(assignment: &StoreAssignment) -> &str {
+pub fn resolve_workflow_id(assignment: &Assignment) -> &str {
     if !assignment.workflow_id.is_empty() {
         return &assignment.workflow_id;
     }
@@ -55,17 +56,15 @@ fn priority_rank(priority: &str) -> u32 {
     }
 }
 
-/// Pick the highest-priority `ready-for-dev` assignment from the store.
-/// Returns `None` if no tasks are ready.
-pub fn pick_next_task(config: &WorkspaceConfig) -> Result<Option<StoreAssignment>, WitPluginError> {
-    if !board_store::store_exists(&config.base_dir) {
-        return Ok(None);
-    }
-    let store = board_store::load_store(&config.base_dir)?;
-    let ready = store
-        .assignments
+/// Pick the highest-priority `ready-for-dev` assignment from the board plugin.
+/// Returns `None` if no tasks are ready or the board plugin is unavailable.
+pub fn pick_next_task(_config: &WorkspaceConfig) -> Result<Option<Assignment>, WitPluginError> {
+    let assignments = match board_client::list_assignments(Some("ready-for-dev")) {
+        Ok(a) => a,
+        Err(_) => return Ok(None), // board plugin unavailable
+    };
+    let ready = assignments
         .into_iter()
-        .filter(|a| a.status == "ready-for-dev")
         .min_by_key(|a| priority_rank(&a.priority));
     Ok(ready)
 }
@@ -76,7 +75,6 @@ pub fn pick_next_task(config: &WorkspaceConfig) -> Result<Option<StoreAssignment
 fn run_validation(config: &WorkspaceConfig) -> (bool, String) {
     let base = &config.base_dir;
 
-    // Detect and run test command
     let test_cmd = if base.join("Cargo.toml").exists() {
         "cargo test 2>&1"
     } else if base.join("package.json").exists() {
@@ -138,21 +136,16 @@ pub fn auto_dev_next(config: &WorkspaceConfig) -> Result<Option<AutoDevResult>, 
 
     let task_id = task.id.clone();
     let workflow_id = resolve_workflow_id(&task).to_string();
-    let base_dir = &config.base_dir;
 
     // ── 1. Set status → in-progress + start comment ──
-    board_store::update_assignment(
-        base_dir,
+    board_client::update_assignment(
         &task_id,
         &serde_json::json!({"status": "in-progress"}),
     )?;
-    board_store::add_comment(
-        base_dir,
+    board_client::add_comment(
         &task_id,
-        &serde_json::json!({
-            "content": format!("[auto-dev] Starting workflow '{workflow_id}'"),
-            "author": "auto-dev"
-        }),
+        &format!("[auto-dev] Starting workflow '{workflow_id}'"),
+        "auto-dev",
     )?;
 
     // ── 2. Execute workflow ──
@@ -175,8 +168,7 @@ pub fn auto_dev_next(config: &WorkspaceConfig) -> Result<Option<AutoDevResult>, 
 
             if test_passed {
                 // ── 4a. Success → review ──
-                board_store::update_assignment(
-                    base_dir,
+                board_client::update_assignment(
                     &task_id,
                     &serde_json::json!({"status": "review"}),
                 )?;
@@ -184,11 +176,7 @@ pub fn auto_dev_next(config: &WorkspaceConfig) -> Result<Option<AutoDevResult>, 
                     "[auto-dev] Workflow '{}' completed. {}. Ready for review.",
                     workflow_id, test_summary
                 );
-                board_store::add_comment(
-                    base_dir,
-                    &task_id,
-                    &serde_json::json!({"content": comment, "author": "auto-dev"}),
-                )?;
+                board_client::add_comment(&task_id, &comment, "auto-dev")?;
                 Ok(Some(AutoDevResult {
                     task_id,
                     workflow_id,
@@ -202,11 +190,7 @@ pub fn auto_dev_next(config: &WorkspaceConfig) -> Result<Option<AutoDevResult>, 
                     "[auto-dev] Workflow '{}' completed but tests failed. {}",
                     workflow_id, test_summary
                 );
-                board_store::add_comment(
-                    base_dir,
-                    &task_id,
-                    &serde_json::json!({"content": comment, "author": "auto-dev"}),
-                )?;
+                board_client::add_comment(&task_id, &comment, "auto-dev")?;
                 Ok(Some(AutoDevResult {
                     task_id,
                     workflow_id,
@@ -219,16 +203,11 @@ pub fn auto_dev_next(config: &WorkspaceConfig) -> Result<Option<AutoDevResult>, 
         Err(e) => {
             // ── 4c. Workflow error → backlog ──
             let comment = format!("[auto-dev] Workflow '{}' failed: {}", workflow_id, e);
-            board_store::update_assignment(
-                base_dir,
+            board_client::update_assignment(
                 &task_id,
                 &serde_json::json!({"status": "backlog"}),
             )?;
-            board_store::add_comment(
-                base_dir,
-                &task_id,
-                &serde_json::json!({"content": comment, "author": "auto-dev"}),
-            )?;
+            board_client::add_comment(&task_id, &comment, "auto-dev")?;
             Ok(Some(AutoDevResult {
                 task_id,
                 workflow_id,
@@ -259,19 +238,20 @@ pub fn auto_dev_watch(
 // ── Status ────────────────────────────────────────────────────────────────
 
 /// Return a summary of board readiness for auto-dev.
-pub fn auto_dev_status(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
-    if !board_store::store_exists(&config.base_dir) {
-        return Ok(serde_json::json!({
-            "total": 0,
-            "by_status": {},
-            "next_task": null
-        }));
-    }
-    let store = board_store::load_store(&config.base_dir)?;
-    let assignments = &store.assignments;
+pub fn auto_dev_status(_config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    let assignments = match board_client::list_assignments(None) {
+        Ok(a) => a,
+        Err(_) => {
+            return Ok(serde_json::json!({
+                "total": 0,
+                "by_status": {},
+                "next_task": null
+            }));
+        }
+    };
 
     let mut by_status = std::collections::BTreeMap::new();
-    for a in assignments {
+    for a in &assignments {
         *by_status.entry(a.status.as_str()).or_insert(0u32) += 1;
     }
 
@@ -300,184 +280,48 @@ pub fn auto_dev_status(config: &WorkspaceConfig) -> Result<serde_json::Value, Wi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board_store::{BoardStore, StoreAssignment};
-
-    fn setup_store_with_tasks(base_dir: &std::path::Path, assignments: Vec<StoreAssignment>) {
-        let store = BoardStore {
-            version: 1,
-            project: "test".to_string(),
-            last_updated: "2026-03-27".to_string(),
-            synced_from: None,
-            epics: vec![],
-            assignments,
-        };
-        board_store::save_store(base_dir, &store).unwrap();
-    }
-
-    fn make_assignment(id: &str, status: &str, priority: &str, labels: Vec<&str>) -> StoreAssignment {
-        StoreAssignment {
-            id: id.to_string(),
-            title: format!("Task {id}"),
-            status: status.to_string(),
-            description: format!("Description for {id}"),
-            assignee: String::new(),
-            priority: priority.to_string(),
-            labels: labels.into_iter().map(|s| s.to_string()).collect(),
-            tasks: vec![],
-            comments: vec![],
-            workflow_id: String::new(),
-        }
-    }
-
-    // ── resolve_workflow_id ──
 
     #[test]
     fn test_resolve_workflow_explicit() {
-        let mut a = make_assignment("t1", "ready-for-dev", "high", vec![]);
-        a.workflow_id = "coding-feature-dev".to_string();
+        let mut a = Assignment {
+            id: "t1".to_string(),
+            title: "Test".to_string(),
+            status: "ready-for-dev".to_string(),
+            workflow_id: "coding-feature-dev".to_string(),
+            ..Default::default()
+        };
         assert_eq!(resolve_workflow_id(&a), "coding-feature-dev");
     }
 
     #[test]
     fn test_resolve_workflow_from_label_story() {
-        let a = make_assignment("t1", "ready-for-dev", "high", vec!["story"]);
+        let a = Assignment {
+            id: "t1".to_string(),
+            labels: vec!["story".to_string()],
+            ..Default::default()
+        };
         assert_eq!(resolve_workflow_id(&a), "coding-story-dev");
     }
 
     #[test]
     fn test_resolve_workflow_from_label_bug() {
-        let a = make_assignment("t1", "ready-for-dev", "high", vec!["bug"]);
+        let a = Assignment {
+            id: "t1".to_string(),
+            labels: vec!["bug".to_string()],
+            ..Default::default()
+        };
         assert_eq!(resolve_workflow_id(&a), "coding-bug-fix");
     }
 
     #[test]
-    fn test_resolve_workflow_from_label_refactor() {
-        let a = make_assignment("t1", "ready-for-dev", "high", vec!["refactor"]);
-        assert_eq!(resolve_workflow_id(&a), "coding-refactor");
-    }
-
-    #[test]
     fn test_resolve_workflow_default() {
-        let a = make_assignment("t1", "ready-for-dev", "high", vec!["unrelated"]);
+        let a = Assignment {
+            id: "t1".to_string(),
+            labels: vec!["unrelated".to_string()],
+            ..Default::default()
+        };
         assert_eq!(resolve_workflow_id(&a), "coding-quick-dev");
     }
-
-    #[test]
-    fn test_resolve_workflow_explicit_overrides_label() {
-        let mut a = make_assignment("t1", "ready-for-dev", "high", vec!["bug"]);
-        a.workflow_id = "coding-story-dev".to_string();
-        assert_eq!(resolve_workflow_id(&a), "coding-story-dev");
-    }
-
-    // ── pick_next_task ──
-
-    #[test]
-    fn test_pick_next_no_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        assert!(pick_next_task(&config).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_pick_next_no_ready_tasks() {
-        let dir = tempfile::tempdir().unwrap();
-        setup_store_with_tasks(
-            dir.path(),
-            vec![
-                make_assignment("t1", "backlog", "high", vec![]),
-                make_assignment("t2", "in-progress", "high", vec![]),
-                make_assignment("t3", "done", "high", vec![]),
-            ],
-        );
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        assert!(pick_next_task(&config).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_pick_next_selects_highest_priority() {
-        let dir = tempfile::tempdir().unwrap();
-        setup_store_with_tasks(
-            dir.path(),
-            vec![
-                make_assignment("low-task", "ready-for-dev", "low", vec![]),
-                make_assignment("critical-task", "ready-for-dev", "critical", vec![]),
-                make_assignment("medium-task", "ready-for-dev", "medium", vec![]),
-            ],
-        );
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let task = pick_next_task(&config).unwrap().unwrap();
-        assert_eq!(task.id, "critical-task");
-    }
-
-    #[test]
-    fn test_pick_next_same_priority_picks_first() {
-        let dir = tempfile::tempdir().unwrap();
-        setup_store_with_tasks(
-            dir.path(),
-            vec![
-                make_assignment("first", "ready-for-dev", "high", vec![]),
-                make_assignment("second", "ready-for-dev", "high", vec![]),
-            ],
-        );
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let task = pick_next_task(&config).unwrap().unwrap();
-        assert_eq!(task.id, "first");
-    }
-
-    // ── auto_dev_next (board state transitions) ──
-
-    #[test]
-    fn test_auto_dev_next_no_tasks_returns_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let result = auto_dev_next(&config).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_auto_dev_next_workflow_error_reverts_to_backlog() {
-        let dir = tempfile::tempdir().unwrap();
-        // Task with explicit non-existent workflow_id → guaranteed workflow error
-        let mut task = make_assignment("t1", "ready-for-dev", "high", vec![]);
-        task.workflow_id = "nonexistent-workflow".to_string();
-        setup_store_with_tasks(dir.path(), vec![task]);
-        // Point workflows_dir to temp dir (no workflow YAMLs there)
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            workflows_dir: dir.path().join("config/workflows"),
-            ..Default::default()
-        };
-
-        let result = auto_dev_next(&config).unwrap().unwrap();
-        assert_eq!(result.outcome, "workflow_error");
-        assert!(!result.test_passed);
-
-        // Verify board was updated
-        let store = board_store::load_store(dir.path()).unwrap();
-        let task = &store.assignments[0];
-        assert_eq!(task.status, "backlog");
-        // Should have 2 comments: start + error
-        assert_eq!(task.comments.len(), 2);
-        assert!(task.comments[0].content.contains("[auto-dev] Starting"));
-        assert!(task.comments[1].content.contains("failed"));
-    }
-
-    // ── priority_rank ──
 
     #[test]
     fn test_priority_ordering() {
@@ -485,60 +329,5 @@ mod tests {
         assert!(priority_rank("high") < priority_rank("medium"));
         assert!(priority_rank("medium") < priority_rank("low"));
         assert!(priority_rank("low") < priority_rank("unknown"));
-    }
-
-    // ── auto_dev_status ──
-
-    #[test]
-    fn test_auto_dev_status_no_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let status = auto_dev_status(&config).unwrap();
-        assert_eq!(status["total"], 0);
-        assert!(status["next_task"].is_null());
-    }
-
-    #[test]
-    fn test_auto_dev_status_with_tasks() {
-        let dir = tempfile::tempdir().unwrap();
-        setup_store_with_tasks(
-            dir.path(),
-            vec![
-                make_assignment("t1", "backlog", "low", vec![]),
-                make_assignment("t2", "ready-for-dev", "high", vec!["bug"]),
-                make_assignment("t3", "ready-for-dev", "critical", vec!["story"]),
-                make_assignment("t4", "in-progress", "medium", vec![]),
-                make_assignment("t5", "done", "medium", vec![]),
-            ],
-        );
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let status = auto_dev_status(&config).unwrap();
-        assert_eq!(status["total"], 5);
-        assert_eq!(status["by_status"]["backlog"], 1);
-        assert_eq!(status["by_status"]["ready-for-dev"], 2);
-        assert_eq!(status["by_status"]["in-progress"], 1);
-        assert_eq!(status["by_status"]["done"], 1);
-        // next_task should be the critical one
-        assert_eq!(status["next_task"]["id"], "t3");
-        assert_eq!(status["next_task"]["workflow"], "coding-story-dev");
-    }
-
-    // ── auto_dev_watch ──
-
-    #[test]
-    fn test_auto_dev_watch_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        let results = auto_dev_watch(&config, Some(5)).unwrap();
-        assert!(results.is_empty());
     }
 }

@@ -1,8 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agent_registry;
 pub mod auto_dev;
-pub mod board;
-pub mod board_store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod board_client;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config_injector;
 pub mod executor;
@@ -100,6 +100,11 @@ impl PluginLifecycle for CodingPackPlugin {
                 },
                 PluginDependency {
                     name: "plugin-memory".to_string(),
+                    version_req: ">=0.1.0".to_string(),
+                    optional: true,
+                },
+                PluginDependency {
+                    name: "plugin-board".to_string(),
                     version_req: ">=0.1.0".to_string(),
                     optional: true,
                 },
@@ -459,9 +464,8 @@ mod tests {
         let json = plugin.get_pages_json();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let pages = parsed.as_array().unwrap();
-        assert_eq!(pages.len(), 11);
+        assert_eq!(pages.len(), 7); // Board pages moved to plugin-board
 
-        // Verify all SDK layout types are present
         let layout_types: Vec<&str> = pages
             .iter()
             .filter_map(|p| p["layout"]["type"].as_str())
@@ -470,16 +474,14 @@ mod tests {
         assert!(layout_types.contains(&"detail"), "missing detail layout");
         assert!(layout_types.contains(&"form"), "missing form layout");
         assert!(layout_types.contains(&"stream"), "missing stream layout");
-        assert!(layout_types.contains(&"board"), "missing board layout");
 
-        // Verify required page IDs exist (order-independent)
         let page_ids: Vec<&str> = pages
             .iter()
             .filter_map(|p| p["id"].as_str())
             .collect();
         for expected in &[
             "overview", "workflows", "workflow-detail", "agents",
-            "status", "execute", "logs", "board", "assignment-detail", "epics", "epic-detail",
+            "status", "execute", "logs",
         ] {
             assert!(page_ids.contains(expected), "missing page: {expected}");
         }

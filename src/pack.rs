@@ -30,6 +30,9 @@ pub struct CodingPackInput {
     /// This is NOT a filesystem path — it's the Pulse workspace identifier.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// Board ID for multi-board filtering within a workspace.
+    #[serde(default)]
+    pub board_id: Option<String>,
 }
 
 /// Execute a pack-level action.
@@ -61,12 +64,12 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
         }
         "data-query" => {
             let endpoint = input.endpoint.as_deref().unwrap_or("");
-            execute_data_query(endpoint, &config, input.workspace.as_deref())
+            execute_data_query(endpoint, &config, input.workspace.as_deref(), input.board_id.as_deref())
         }
         "data-mutate" => {
             let endpoint = input.endpoint.as_deref().unwrap_or("");
             let payload = input.payload.clone().unwrap_or(serde_json::Value::Null);
-            execute_data_mutate(endpoint, &payload, &config, input.workspace.as_deref())
+            execute_data_mutate(endpoint, &payload, &config, input.workspace.as_deref(), input.board_id.as_deref())
         }
         "auto-dev-status" => to_json_string(crate::auto_dev::auto_dev_status(&config)),
         "auto-dev-next" => {
@@ -273,42 +276,20 @@ fn pack_status_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitP
 /// Handle data-query requests from dashboard proxy.
 /// Routes endpoint paths to internal data functions.
 /// `workspace` is the Pulse workspace name (not a path) for task filtering.
-fn execute_data_query(endpoint: &str, config: &WorkspaceConfig, workspace: Option<&str>) -> Result<String, WitPluginError> {
+fn execute_data_query(endpoint: &str, config: &WorkspaceConfig, workspace: Option<&str>, _board_id: Option<&str>) -> Result<String, WitPluginError> {
+    let _ = workspace;
     let endpoint = endpoint.trim_start_matches('/');
     let result = match endpoint {
         "status" => pack_status_value(config)?,
         "workflows/list" => list_workflows_detail_value(config)?,
         "agents/list" => list_agents_value()?,
-        "board/data" => crate::board::get_board_data(config, workspace)?,
-        "board/epics/list" => crate::board::get_epics_list(config)?,
-        "board/assignments/list" => {
-            // Try Pulse API, fallback to board-store
-            crate::pulse_api::get_board_data(workspace)
-                .or_else(|_| crate::board_store::get_assignments_list_from_store(config))?
-        }
-        ep if ep.starts_with("board/assignments/") => {
-            let id = ep.strip_prefix("board/assignments/").unwrap_or("");
-            crate::pulse_api::get_assignment_detail(id)
-                .or_else(|_| crate::board_store::get_assignment_detail_from_store(id, config))?
-        }
-        "board/filters" => crate::pulse_api::get_filter_options(workspace)
-            .or_else(|_| crate::board::get_filter_options(config))?,
-        "board/summary" => crate::board::get_board_summary(config)?,
-        ep if ep.starts_with("board/epics/") => {
-            let id = ep.strip_prefix("board/epics/").unwrap_or("");
-            crate::board::get_epic_detail(id, config)?
-        }
-        ep if ep.starts_with("board/stories/") => {
-            let id = ep.strip_prefix("board/stories/").unwrap_or("");
-            crate::board::get_story_detail(id, config)?
-        }
         ep if ep.starts_with("workflows/") => {
             let id = ep.strip_prefix("workflows/").unwrap_or("");
             get_workflow_detail_value(id, config)?
         }
         _ => {
             return Err(WitPluginError::not_found(format!(
-                "Unknown data endpoint: '{}'. Available: status, workflows/list, agents/list, workflows/{{id}}, board/data, board/filters, board/summary, board/epics/{{id}}, board/stories/{{id}}",
+                "Unknown data endpoint: '{}'. Available: status, workflows/list, agents/list, workflows/{{id}}. Board endpoints moved to plugin-board.",
                 endpoint
             )));
         }
@@ -435,87 +416,19 @@ fn get_workflow_detail_value(
     }))
 }
 
-/// Handle data-mutate requests for board CRUD operations.
+/// Handle data-mutate requests. Board mutations moved to plugin-board.
 fn execute_data_mutate(
     endpoint: &str,
-    payload: &serde_json::Value,
-    config: &WorkspaceConfig,
-    workspace: Option<&str>,
+    _payload: &serde_json::Value,
+    _config: &WorkspaceConfig,
+    _workspace: Option<&str>,
+    _board_id: Option<&str>,
 ) -> Result<String, WitPluginError> {
     let endpoint = endpoint.trim_start_matches('/');
-    let result = match endpoint {
-        "board/sync" => {
-            let store = crate::board_store::sync_from_artifacts(config)?;
-            serde_json::to_value(&store)
-                .map_err(|e| WitPluginError::internal(format!("JSON error: {e}")))?
-        }
-        ep if ep.starts_with("board/status/") => {
-            let item_id = ep.strip_prefix("board/status/").unwrap_or("");
-            let new_status = payload
-                .get("status")
-                .and_then(|s| s.as_str())
-                .ok_or_else(|| WitPluginError::invalid_input("'status' field required in payload"))?;
-            crate::board_store::update_item_status(&config.base_dir, item_id, new_status)?
-        }
-        "board/epics" => crate::board_store::create_epic(&config.base_dir, payload)?,
-        ep if ep.starts_with("board/epics/") => {
-            let epic_id = ep.strip_prefix("board/epics/").unwrap_or("");
-            crate::board_store::update_epic(&config.base_dir, epic_id, payload)?
-        }
-        "board/stories" => crate::board_store::create_story(&config.base_dir, payload)?,
-        ep if ep.starts_with("board/stories/") => {
-            let story_id = ep.strip_prefix("board/stories/").unwrap_or("");
-            crate::board_store::update_story(&config.base_dir, story_id, payload)?
-        }
-        "board/assignments" => {
-            // Try Pulse API, fallback to board-store
-            crate::pulse_api::create_assignment(payload, workspace)
-                .or_else(|_| crate::board_store::create_assignment(&config.base_dir, payload))?
-        }
-        ep if ep.starts_with("board/assignments/") && ep.ends_with("/comments") => {
-            let id = ep
-                .strip_prefix("board/assignments/")
-                .unwrap_or("")
-                .strip_suffix("/comments")
-                .unwrap_or("");
-            crate::pulse_api::add_comment(id, payload)
-                .or_else(|_| crate::board_store::add_comment(&config.base_dir, id, payload))?
-        }
-        ep if ep.starts_with("board/assignments/") && ep.ends_with("/subtasks") => {
-            let id = ep
-                .strip_prefix("board/assignments/")
-                .unwrap_or("")
-                .strip_suffix("/subtasks")
-                .unwrap_or("");
-            crate::pulse_api::add_subtask(id, payload)
-                .or_else(|_| crate::board_store::add_subtask(&config.base_dir, id, payload))?
-        }
-        ep if ep.starts_with("board/assignments/") && ep.contains("/subtasks/") => {
-            let rest = ep.strip_prefix("board/assignments/").unwrap_or("");
-            let parts: Vec<&str> = rest.split('/').collect();
-            if parts.len() >= 3 {
-                crate::pulse_api::toggle_subtask(parts[0], parts[2])
-                    .or_else(|_| crate::board_store::toggle_subtask(&config.base_dir, parts[0], parts[2]))?
-            } else {
-                return Err(WitPluginError::invalid_input(
-                    "Expected: board/assignments/{id}/subtasks/{subtask_id}/toggle",
-                ));
-            }
-        }
-        ep if ep.starts_with("board/assignments/") => {
-            let id = ep.strip_prefix("board/assignments/").unwrap_or("");
-            crate::pulse_api::update_assignment(id, payload)
-                .or_else(|_| crate::board_store::update_assignment(&config.base_dir, id, payload))?
-        }
-        _ => {
-            return Err(WitPluginError::not_found(format!(
-                "Unknown mutation endpoint: '{}'. Available: board/sync, board/status/{{id}}, board/epics, board/epics/{{id}}, board/stories, board/stories/{{id}}, board/assignments, board/assignments/{{id}}, board/assignments/{{id}}/comments, board/assignments/{{id}}/subtasks, board/assignments/{{id}}/subtasks/{{st_id}}/toggle",
-                endpoint
-            )));
-        }
-    };
-    serde_json::to_string_pretty(&result)
-        .map_err(|e| WitPluginError::internal(format!("JSON serialization error: {e}")))
+    Err(WitPluginError::not_found(format!(
+        "Unknown mutation endpoint: '{}'. Board mutations moved to plugin-board.",
+        endpoint
+    )))
 }
 
 #[cfg(test)]
@@ -532,6 +445,7 @@ mod tests {
             payload: None,
             workspace_dir: None,
             workspace: None,
+            board_id: None,
         }
     }
 
