@@ -25,6 +25,44 @@ pub struct BoardStore {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synced_from: Option<String>,
     pub epics: Vec<StoreEpic>,
+    #[serde(default)]
+    pub assignments: Vec<StoreAssignment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreAssignment {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub assignee: String,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub tasks: Vec<SubTask>,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubTask {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: String,
+    pub author: String,
+    pub content: String,
+    #[serde(default)]
+    pub timestamp: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +227,7 @@ pub fn sync_from_artifacts(config: &WorkspaceConfig) -> Result<BoardStore, WitPl
         },
         synced_from: Some("sprint-status.yaml".to_string()),
         epics: store_epics,
+        assignments: vec![],
     };
 
     save_store(&config.base_dir, &store)?;
@@ -201,75 +240,42 @@ pub fn get_board_data_from_store(
     config: &WorkspaceConfig,
 ) -> Result<serde_json::Value, WitPluginError> {
     let store = load_store(&config.base_dir)?;
-    let mut items: Vec<board::BoardItem> = Vec::new();
 
-    for epic in &store.epics {
-        let phase = board::epic_phase(epic.number);
-        let done_count = epic.stories.iter().filter(|s| s.status == "done").count();
-        let total = epic.stories.len();
-        let pct = if total > 0 {
-            (done_count as f64 / total as f64) * 100.0
-        } else {
-            0.0
-        };
+    let items: Vec<board::BoardItem> = store
+        .assignments
+        .iter()
+        .map(|a| {
+            let total_tasks = a.tasks.len();
+            let done_tasks = a.tasks.iter().filter(|t| t.done).count();
+            let task_progress = if total_tasks > 0 {
+                Some((done_tasks as f64 / total_tasks as f64 * 100.0 * 10.0).round() / 10.0)
+            } else {
+                None
+            };
+            board::BoardItem {
+                id: a.id.clone(),
+                item_type: "assignment".to_string(),
+                title: a.title.clone(),
+                status: a.status.clone(),
+                phase: 0,
+                epic_id: a.assignee.clone(),
+                epic_title: Some(format!("{}/{} tasks", done_tasks, total_tasks)),
+                story_number: Some(a.priority.clone()),
+                story_count: Some(total_tasks),
+                stories_done: Some(done_tasks),
+                progress_pct: task_progress,
+            }
+        })
+        .collect();
 
-        items.push(board::BoardItem {
-            id: format!("epic-{}", epic.number),
-            item_type: "epic".to_string(),
-            title: epic.title.clone(),
-            status: epic.status.clone(),
-            phase,
-            epic_id: format!("epic-{}", epic.number),
-            epic_title: None,
-            story_number: None,
-            story_count: Some(total),
-            stories_done: Some(done_count),
-            progress_pct: Some((pct * 10.0).round() / 10.0),
-        });
-
-        for story in &epic.stories {
-            items.push(board::BoardItem {
-                id: story.id.clone(),
-                item_type: "story".to_string(),
-                title: story.title.clone(),
-                status: story.status.clone(),
-                phase,
-                epic_id: format!("epic-{}", epic.number),
-                epic_title: Some(epic.title.clone()),
-                story_number: Some(story.story_number.clone()),
-                story_count: None,
-                stories_done: None,
-                progress_pct: None,
-            });
-        }
-    }
-
-    // Compute summary
-    let total_epics = store.epics.len();
-    let total_stories: usize = store.epics.iter().map(|e| e.stories.len()).sum();
-    let done_epics = store.epics.iter().filter(|e| e.status == "done").count();
-    let done_stories = items
-        .iter()
-        .filter(|i| i.item_type == "story" && i.status == "done")
-        .count();
-    let in_progress = items
-        .iter()
-        .filter(|i| i.item_type == "story" && i.status == "in-progress")
-        .count();
-    let ready = items
-        .iter()
-        .filter(|i| i.item_type == "story" && i.status == "ready-for-dev")
-        .count();
-    let review = items
-        .iter()
-        .filter(|i| i.item_type == "story" && i.status == "review")
-        .count();
-    let backlog = items
-        .iter()
-        .filter(|i| i.item_type == "story" && i.status == "backlog")
-        .count();
-    let progress_pct = if total_stories > 0 {
-        ((done_stories as f64 / total_stories as f64) * 1000.0).round() / 10.0
+    let total = items.len();
+    let done = items.iter().filter(|i| i.status == "done").count();
+    let in_progress = items.iter().filter(|i| i.status == "in-progress").count();
+    let ready = items.iter().filter(|i| i.status == "ready-for-dev").count();
+    let review = items.iter().filter(|i| i.status == "review").count();
+    let backlog = items.iter().filter(|i| i.status == "backlog").count();
+    let progress_pct = if total > 0 {
+        ((done as f64 / total as f64) * 1000.0).round() / 10.0
     } else {
         0.0
     };
@@ -277,25 +283,12 @@ pub fn get_board_data_from_store(
     let data = board::BoardData {
         project: store.project,
         last_updated: store.last_updated,
-        phases: vec![
-            board::Phase {
-                id: 1,
-                label: board::phase_label(1).to_string(),
-            },
-            board::Phase {
-                id: 2,
-                label: board::phase_label(2).to_string(),
-            },
-            board::Phase {
-                id: 3,
-                label: board::phase_label(3).to_string(),
-            },
-        ],
+        phases: vec![],
         summary: board::BoardSummary {
-            total_epics,
-            total_stories,
-            done_epics,
-            done_stories,
+            total_epics: 0,
+            total_stories: total,
+            done_epics: 0,
+            done_stories: done,
             in_progress_stories: in_progress,
             ready_stories: ready,
             backlog_stories: backlog,
@@ -307,6 +300,106 @@ pub fn get_board_data_from_store(
 
     serde_json::to_value(&data)
         .map_err(|e| WitPluginError::internal(format!("JSON serialization error: {e}")))
+}
+
+pub fn get_epics_list_from_store(
+    config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
+    let store = load_store(&config.base_dir)?;
+
+    let rows: Vec<serde_json::Value> = store
+        .epics
+        .iter()
+        .map(|epic| {
+            let phase = board::epic_phase(epic.number);
+            let done = epic.stories.iter().filter(|s| s.status == "done").count();
+            let total = epic.stories.len();
+            let progress = if total > 0 {
+                format!("{}/{} ({:.0}%)", done, total, done as f64 / total as f64 * 100.0)
+            } else {
+                "No stories".to_string()
+            };
+            serde_json::json!({
+                "id": format!("epic-{}", epic.number),
+                "title": epic.title,
+                "status": epic.status,
+                "phase_label": board::phase_label(phase),
+                "progress": progress,
+                "story_count": total,
+                "description": epic.description,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "items": rows }))
+}
+
+pub fn get_assignments_list_from_store(
+    config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
+    let store = load_store(&config.base_dir)?;
+
+    let rows: Vec<serde_json::Value> = store
+        .assignments
+        .iter()
+        .map(|a| {
+            let total = a.tasks.len();
+            let done = a.tasks.iter().filter(|t| t.done).count();
+            serde_json::json!({
+                "id": a.id,
+                "title": a.title,
+                "status": a.status,
+                "assignee": if a.assignee.is_empty() { "Unassigned" } else { &a.assignee },
+                "priority": a.priority,
+                "task_progress": format!("{}/{}", done, total),
+                "comment_count": a.comments.len(),
+                "labels": a.labels,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "items": rows }))
+}
+
+pub fn get_assignment_detail_from_store(
+    assignment_id: &str,
+    config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
+    let store = load_store(&config.base_dir)?;
+    let assignment = store
+        .assignments
+        .iter()
+        .find(|a| a.id == assignment_id)
+        .ok_or_else(|| {
+            WitPluginError::not_found(format!("Assignment '{assignment_id}' not found"))
+        })?;
+
+    let total_tasks = assignment.tasks.len();
+    let done_tasks = assignment.tasks.iter().filter(|t| t.done).count();
+
+    Ok(serde_json::json!({
+        "id": assignment.id,
+        "title": assignment.title,
+        "status": assignment.status,
+        "description": assignment.description,
+        "assignee": assignment.assignee,
+        "priority": assignment.priority,
+        "labels": assignment.labels,
+        "task_progress": format!("{}/{}", done_tasks, total_tasks),
+        "tasks": assignment.tasks.iter().map(|t| serde_json::json!({
+            "id": t.id,
+            "title": t.title,
+            "done": t.done,
+        })).collect::<Vec<_>>(),
+        "comments": assignment.comments.iter().map(|c| serde_json::json!({
+            "id": c.id,
+            "author": c.author,
+            "content": c.content,
+            "timestamp": c.timestamp,
+        })).collect::<Vec<_>>(),
+        "task_count": total_tasks,
+        "tasks_done": done_tasks,
+    }))
 }
 
 pub fn get_filter_options_from_store(
@@ -789,6 +882,7 @@ mod tests {
             project: "test-project".to_string(),
             last_updated: "2026-03-27".to_string(),
             synced_from: None,
+            assignments: vec![],
             epics: vec![StoreEpic {
                 number: 1,
                 title: "Test Epic".to_string(),

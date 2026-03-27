@@ -251,6 +251,14 @@ fn execute_data_query(endpoint: &str, config: &WorkspaceConfig) -> Result<String
         "workflows/list" => list_workflows_detail_value(config)?,
         "agents/list" => list_agents_value()?,
         "board/data" => crate::board::get_board_data(config)?,
+        "board/epics/list" => crate::board::get_epics_list(config)?,
+        "board/assignments/list" => {
+            crate::board_store::get_assignments_list_from_store(config)?
+        }
+        ep if ep.starts_with("board/assignments/") => {
+            let id = ep.strip_prefix("board/assignments/").unwrap_or("");
+            crate::board_store::get_assignment_detail_from_store(id, config)?
+        }
         "board/filters" => crate::board::get_filter_options(config)?,
         "board/summary" => crate::board::get_board_summary(config)?,
         ep if ep.starts_with("board/epics/") => {

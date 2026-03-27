@@ -256,11 +256,11 @@
     },
     {
       "id": "board",
-      "title": "Scrum Board",
+      "title": "Task Board",
       "path": "/board",
       "icon": "kanban-square",
       "nav_order": 1,
-      "description": "Kanban board showing epics and stories by status",
+      "description": "Kanban board showing tasks by status",
       "layout": {
         "type": "board",
         "data_endpoint": "board/data",
@@ -271,15 +271,81 @@
           { "id": "review", "label": "Review", "color": "#8b5cf6" },
           { "id": "done", "label": "Done", "color": "#10b981" }
         ],
-        "swimlane_key": "epic_id",
-        "card_fields": ["id", "title", "status", "epic_title", "phase"],
+        "card_fields": ["id", "title", "status", "epic_title", "story_number"],
         "status_field": "status",
-        "filters_endpoint": "board/filters",
-        "filters": [
-          { "id": "phase", "label": "Phase", "type": "select", "options_key": "phases" },
-          { "id": "epic", "label": "Epic", "type": "select", "options_key": "epics" },
-          { "id": "item_type", "label": "Type", "type": "select", "options_key": "types" }
-        ]
+        "card_detail_endpoint": "board/assignments/{id}"
+      }
+    },
+    {
+      "id": "assignment-detail",
+      "title": "Assignment Detail",
+      "path": "/board/assignments/:id",
+      "icon": "clipboard-list",
+      "nav_order": 99,
+      "description": "Assignment with tasks checklist and comments",
+      "layout": {
+        "type": "detail",
+        "sections": [
+          {
+            "id": "info",
+            "title": "Assignment",
+            "fields": [
+              { "key": "id", "label": "ID" },
+              { "key": "title", "label": "Title" },
+              { "key": "status", "label": "Status" },
+              { "key": "assignee", "label": "Assignee" },
+              { "key": "priority", "label": "Priority" },
+              { "key": "labels", "label": "Labels" },
+              { "key": "description", "label": "Description" }
+            ]
+          },
+          {
+            "id": "tasks",
+            "title": "Tasks",
+            "fields": [
+              { "key": "task_progress", "label": "Progress" },
+              { "key": "tasks", "label": "Checklist" }
+            ]
+          },
+          {
+            "id": "comments",
+            "title": "Comments",
+            "fields": [
+              { "key": "comments", "label": "Thread" }
+            ]
+          }
+        ],
+        "data_endpoint": "board/assignments/{id}"
+      }
+    },
+    {
+      "id": "epics",
+      "title": "Epics",
+      "path": "/epics",
+      "icon": "layers",
+      "nav_order": 2,
+      "description": "All epics with stories and progress",
+      "layout": {
+        "type": "table",
+        "columns": [
+          { "key": "id", "label": "Epic", "sortable": true },
+          { "key": "title", "label": "Title", "sortable": true },
+          { "key": "status", "label": "Status", "sortable": true },
+          { "key": "phase_label", "label": "Phase", "sortable": true },
+          { "key": "progress", "label": "Progress", "sortable": false },
+          { "key": "story_count", "label": "Stories", "sortable": true },
+          { "key": "description", "label": "Description", "sortable": false }
+        ],
+        "data_endpoint": "board/epics/list",
+        "row_actions": [
+          {
+            "id": "view",
+            "label": "View Stories",
+            "method": "GET",
+            "endpoint": "board/epics/{id}"
+          }
+        ],
+        "bulk_actions": []
       }
     },
     {
@@ -287,8 +353,8 @@
       "title": "Epic Detail",
       "path": "/board/epics/:id",
       "icon": "layers",
-      "nav_order": 98,
-      "description": "Epic details including stories and progress",
+      "nav_order": 99,
+      "description": "Epic details with stories and tasks",
       "layout": {
         "type": "detail",
         "sections": [
@@ -300,22 +366,8 @@
               { "key": "title", "label": "Title" },
               { "key": "status", "label": "Status" },
               { "key": "phase_label", "label": "Phase" },
-              { "key": "progress", "label": "Progress" }
-            ]
-          },
-          {
-            "id": "description",
-            "title": "Description",
-            "fields": [
+              { "key": "progress", "label": "Progress" },
               { "key": "description", "label": "Description" }
-            ]
-          },
-          {
-            "id": "requirements",
-            "title": "Requirements Coverage",
-            "fields": [
-              { "key": "frs_covered", "label": "FRs Covered" },
-              { "key": "nfrs_covered", "label": "NFRs Covered" }
             ]
           },
           {
@@ -330,47 +382,6 @@
           }
         ],
         "data_endpoint": "board/epics/{id}"
-      }
-    },
-    {
-      "id": "story-detail",
-      "title": "Story Detail",
-      "path": "/board/stories/:id",
-      "icon": "bookmark",
-      "nav_order": 99,
-      "description": "Story details with acceptance criteria",
-      "layout": {
-        "type": "detail",
-        "sections": [
-          {
-            "id": "info",
-            "title": "Story Info",
-            "fields": [
-              { "key": "id", "label": "Story ID" },
-              { "key": "title", "label": "Title" },
-              { "key": "story_number", "label": "Story Number" },
-              { "key": "status", "label": "Status" },
-              { "key": "epic_id", "label": "Epic" },
-              { "key": "epic_title", "label": "Epic Title" },
-              { "key": "phase_label", "label": "Phase" }
-            ]
-          },
-          {
-            "id": "user-story",
-            "title": "User Story",
-            "fields": [
-              { "key": "user_story", "label": "User Story" }
-            ]
-          },
-          {
-            "id": "acceptance",
-            "title": "Acceptance Criteria",
-            "fields": [
-              { "key": "acceptance_criteria", "label": "Criteria" }
-            ]
-          }
-        ],
-        "data_endpoint": "board/stories/{id}"
       }
     }
   ]

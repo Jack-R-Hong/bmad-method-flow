@@ -1,4 +1,4 @@
-//! Scrum Board data module.
+//! Task Board data module.
 //!
 //! Parses `sprint-status.yaml` and epic markdown files to produce structured
 //! board data for the dashboard Kanban view.
@@ -604,6 +604,44 @@ pub fn get_board_data(config: &WorkspaceConfig) -> Result<serde_json::Value, Wit
 
     serde_json::to_value(&data)
         .map_err(|e| WitPluginError::internal(format!("JSON serialization error: {e}")))
+}
+
+/// Get all epics as a table-friendly list.
+pub fn get_epics_list(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    if crate::board_store::store_exists(&config.base_dir) {
+        return crate::board_store::get_epics_list_from_store(config);
+    }
+    let (epics, _project, _last_updated) = parse_sprint_status(&config.base_dir)?;
+    let md_metadata = parse_epics_markdown(&config.base_dir);
+
+    let rows: Vec<serde_json::Value> = epics
+        .iter()
+        .map(|epic| {
+            let phase = epic_phase(epic.number);
+            let done = epic.stories.iter().filter(|s| s.status == "done").count();
+            let total = epic.stories.len();
+            let progress = if total > 0 {
+                format!("{}/{} ({:.0}%)", done, total, done as f64 / total as f64 * 100.0)
+            } else {
+                "No stories".to_string()
+            };
+            let desc = md_metadata
+                .get(&epic.number)
+                .map(|m| m.description.clone())
+                .unwrap_or_default();
+            serde_json::json!({
+                "id": format!("epic-{}", epic.number),
+                "title": epic.title,
+                "status": epic.status,
+                "phase_label": phase_label(phase),
+                "progress": progress,
+                "story_count": total,
+                "description": desc,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "items": rows }))
 }
 
 /// Get available filter options.

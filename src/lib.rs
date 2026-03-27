@@ -232,7 +232,8 @@ impl DashboardExtensionPlugin for CodingPackPlugin {
                     "GET  /executions/stream — SSE execution event stream",
                     "GET  /tasks/{task_id}/workflow-context — Task workflow context",
                     "GET  /tasks/{task_id}/agent-info — Task agent info",
-                    "GET  /board/data       — Scrum board with all epics and stories",
+                    "GET  /board/data       — Task board with all epics and stories",
+                    "GET  /board/epics/list  — All epics as table data",
                     "GET  /board/filters    — Available filter options for board",
                     "GET  /board/summary    — Compact sprint progress summary",
                     "GET  /board/epics/{id} — Epic detail with stories",
@@ -442,7 +443,7 @@ mod tests {
         let json = plugin.get_pages_json();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let pages = parsed.as_array().unwrap();
-        assert_eq!(pages.len(), 10);
+        assert_eq!(pages.len(), 11);
 
         // Verify all SDK layout types are present
         let layout_types: Vec<&str> = pages
@@ -462,7 +463,7 @@ mod tests {
             .collect();
         for expected in &[
             "overview", "workflows", "workflow-detail", "agents",
-            "status", "execute", "logs", "board", "epic-detail", "story-detail",
+            "status", "execute", "logs", "board", "assignment-detail", "epics", "epic-detail",
         ] {
             assert!(page_ids.contains(expected), "missing page: {expected}");
         }
