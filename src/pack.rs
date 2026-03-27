@@ -19,6 +19,9 @@ pub struct CodingPackInput {
     /// Data endpoint path for data-query action (set by Pulse proxy)
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// Mutation payload for data-mutate action
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
     /// Optional workspace root directory override.
     /// If not set, falls back to PULSE_WORKSPACE_DIR env var, then current directory.
     #[serde(default)]
@@ -56,8 +59,13 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
             let endpoint = input.endpoint.as_deref().unwrap_or("");
             execute_data_query(endpoint, &config)
         }
+        "data-mutate" => {
+            let endpoint = input.endpoint.as_deref().unwrap_or("");
+            let payload = input.payload.clone().unwrap_or(serde_json::Value::Null);
+            execute_data_mutate(endpoint, &payload, &config)
+        }
         other => Err(WitPluginError::not_found(format!(
-            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query",
+            "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query, data-mutate",
             other
         ))),
     }
@@ -386,6 +394,48 @@ fn get_workflow_detail_value(
     }))
 }
 
+/// Handle data-mutate requests for board CRUD operations.
+fn execute_data_mutate(
+    endpoint: &str,
+    payload: &serde_json::Value,
+    config: &WorkspaceConfig,
+) -> Result<String, WitPluginError> {
+    let endpoint = endpoint.trim_start_matches('/');
+    let result = match endpoint {
+        "board/sync" => {
+            let store = crate::board_store::sync_from_artifacts(config)?;
+            serde_json::to_value(&store)
+                .map_err(|e| WitPluginError::internal(format!("JSON error: {e}")))?
+        }
+        ep if ep.starts_with("board/status/") => {
+            let item_id = ep.strip_prefix("board/status/").unwrap_or("");
+            let new_status = payload
+                .get("status")
+                .and_then(|s| s.as_str())
+                .ok_or_else(|| WitPluginError::invalid_input("'status' field required in payload"))?;
+            crate::board_store::update_item_status(&config.base_dir, item_id, new_status)?
+        }
+        "board/epics" => crate::board_store::create_epic(&config.base_dir, payload)?,
+        ep if ep.starts_with("board/epics/") => {
+            let epic_id = ep.strip_prefix("board/epics/").unwrap_or("");
+            crate::board_store::update_epic(&config.base_dir, epic_id, payload)?
+        }
+        "board/stories" => crate::board_store::create_story(&config.base_dir, payload)?,
+        ep if ep.starts_with("board/stories/") => {
+            let story_id = ep.strip_prefix("board/stories/").unwrap_or("");
+            crate::board_store::update_story(&config.base_dir, story_id, payload)?
+        }
+        _ => {
+            return Err(WitPluginError::not_found(format!(
+                "Unknown mutation endpoint: '{}'. Available: board/sync, board/status/{{id}}, board/epics, board/epics/{{id}}, board/stories, board/stories/{{id}}",
+                endpoint
+            )));
+        }
+    };
+    serde_json::to_string_pretty(&result)
+        .map_err(|e| WitPluginError::internal(format!("JSON serialization error: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +447,7 @@ mod tests {
             workflow_id: None,
             input: None,
             endpoint: None,
+            payload: None,
             workspace_dir: None,
         }
     }

@@ -18,7 +18,7 @@ const EPICS_PATHS: &[&str] = &[
 ];
 
 /// Derive phase from epic number.
-fn epic_phase(epic_num: u32) -> u32 {
+pub(crate) fn epic_phase(epic_num: u32) -> u32 {
     match epic_num {
         1..=11 => 1,
         12..=17 => 2,
@@ -27,7 +27,7 @@ fn epic_phase(epic_num: u32) -> u32 {
     }
 }
 
-fn phase_label(phase: u32) -> &'static str {
+pub(crate) fn phase_label(phase: u32) -> &'static str {
     match phase {
         1 => "Phase 1: Core Plugin Development",
         2 => "Phase 2: SDK Integration & Agent Mesh",
@@ -153,34 +153,34 @@ pub struct BoardSummaryCompact {
 // ── Internal parsing types ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-struct ParsedEpic {
-    number: u32,
-    title: String,
-    status: String,
-    stories: Vec<ParsedStory>,
+pub(crate) struct ParsedEpic {
+    pub(crate) number: u32,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) stories: Vec<ParsedStory>,
 }
 
 #[derive(Debug, Clone)]
-struct ParsedStory {
-    id: String,
-    epic_number: u32,
-    story_number: String,
-    title: String,
-    status: String,
+pub(crate) struct ParsedStory {
+    pub(crate) id: String,
+    pub(crate) epic_number: u32,
+    pub(crate) story_number: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
 }
 
 #[derive(Debug, Clone, Default)]
-struct EpicMetadata {
-    description: String,
-    frs_covered: String,
-    nfrs_covered: String,
-    stories: BTreeMap<String, StoryMetadata>,
+pub(crate) struct EpicMetadata {
+    pub(crate) description: String,
+    pub(crate) frs_covered: String,
+    pub(crate) nfrs_covered: String,
+    pub(crate) stories: BTreeMap<String, StoryMetadata>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct StoryMetadata {
-    user_story: String,
-    acceptance_criteria: String,
+pub(crate) struct StoryMetadata {
+    pub(crate) user_story: String,
+    pub(crate) acceptance_criteria: String,
 }
 
 // ── YAML parsing ─────────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ fn slug_to_title(slug: &str) -> String {
 }
 
 /// Parse sprint-status.yaml into structured epic/story data.
-fn parse_sprint_status(
+pub(crate) fn parse_sprint_status(
     base_dir: &Path,
 ) -> Result<(Vec<ParsedEpic>, String, String), WitPluginError> {
     let path = base_dir.join(SPRINT_STATUS_PATH);
@@ -318,7 +318,7 @@ fn parse_sprint_status(
 // ── Markdown parsing ─────────────────────────────────────────────────────────
 
 /// Parse epic markdown files to extract metadata (descriptions, FRs, user stories).
-fn parse_epics_markdown(base_dir: &Path) -> BTreeMap<u32, EpicMetadata> {
+pub(crate) fn parse_epics_markdown(base_dir: &Path) -> BTreeMap<u32, EpicMetadata> {
     let mut metadata: BTreeMap<u32, EpicMetadata> = BTreeMap::new();
 
     for rel_path in EPICS_PATHS {
@@ -483,6 +483,9 @@ fn parse_story_section(lines: &[&str], i: &mut usize) -> StoryMetadata {
 
 /// Get full board data for the Kanban view.
 pub fn get_board_data(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    if crate::board_store::store_exists(&config.base_dir) {
+        return crate::board_store::get_board_data_from_store(config);
+    }
     let (epics, project, last_updated) = parse_sprint_status(&config.base_dir)?;
     let md_metadata = parse_epics_markdown(&config.base_dir);
 
@@ -605,6 +608,9 @@ pub fn get_board_data(config: &WorkspaceConfig) -> Result<serde_json::Value, Wit
 
 /// Get available filter options.
 pub fn get_filter_options(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    if crate::board_store::store_exists(&config.base_dir) {
+        return crate::board_store::get_filter_options_from_store(config);
+    }
     let (epics, _project, _last_updated) = parse_sprint_status(&config.base_dir)?;
 
     let mut epic_options: Vec<FilterValue> = epics
@@ -675,6 +681,9 @@ pub fn get_epic_detail(
     epic_id: &str,
     config: &WorkspaceConfig,
 ) -> Result<serde_json::Value, WitPluginError> {
+    if crate::board_store::store_exists(&config.base_dir) {
+        return crate::board_store::get_epic_detail_from_store(epic_id, config);
+    }
     let epic_num: u32 = epic_id
         .strip_prefix("epic-")
         .and_then(|n| n.parse().ok())
@@ -745,6 +754,9 @@ pub fn get_story_detail(
     story_id: &str,
     config: &WorkspaceConfig,
 ) -> Result<serde_json::Value, WitPluginError> {
+    if crate::board_store::store_exists(&config.base_dir) {
+        return crate::board_store::get_story_detail_from_store(story_id, config);
+    }
     let (epics, _project, _last_updated) = parse_sprint_status(&config.base_dir)?;
     let md_metadata = parse_epics_markdown(&config.base_dir);
 
@@ -783,6 +795,9 @@ pub fn get_story_detail(
 
 /// Get compact board summary for badge display.
 pub fn get_board_summary(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    if crate::board_store::store_exists(&config.base_dir) {
+        return crate::board_store::get_board_summary_from_store(config);
+    }
     let (epics, _project, _last_updated) = parse_sprint_status(&config.base_dir)?;
 
     let total_stories: usize = epics.iter().map(|e| e.stories.len()).sum();

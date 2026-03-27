@@ -17,6 +17,7 @@ const TOOL_VALIDATE_PACK: &str = "bmad_validate_pack";
 const TOOL_LIST_WORKFLOWS: &str = "bmad_list_workflows";
 const TOOL_LIST_PLUGINS: &str = "bmad_list_plugins";
 const TOOL_DATA_QUERY: &str = "bmad_data_query";
+const TOOL_DATA_MUTATE: &str = "bmad_data_mutate";
 
 /// Tool provider that exposes BMAD coding pack operations as LLM-callable tools.
 ///
@@ -51,6 +52,7 @@ fn tool_name_to_action(name: &str) -> Option<&'static str> {
         TOOL_LIST_WORKFLOWS => Some("list-workflows"),
         TOOL_LIST_PLUGINS => Some("list-plugins"),
         TOOL_DATA_QUERY => Some("data-query"),
+        TOOL_DATA_MUTATE => Some("data-mutate"),
         _ => None,
     }
 }
@@ -113,6 +115,26 @@ impl ToolProvider for BmadToolProvider {
                 }),
                 sensitivity: ToolSensitivity::Low,
             },
+            ToolDef {
+                name: TOOL_DATA_MUTATE.to_string(),
+                description: "Mutate board data (update status, create/update epics and stories)"
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "endpoint": {
+                            "type": "string",
+                            "description": "Mutation endpoint path (e.g. board/sync, board/status/{id}, board/epics, board/stories)"
+                        },
+                        "payload": {
+                            "type": "object",
+                            "description": "Mutation payload"
+                        }
+                    },
+                    "required": ["endpoint"]
+                }),
+                sensitivity: ToolSensitivity::Medium,
+            },
         ]
     }
 
@@ -120,15 +142,22 @@ impl ToolProvider for BmadToolProvider {
         let action =
             tool_name_to_action(&call.name).ok_or_else(|| ToolError::not_found(&call.name))?;
 
-        let endpoint = if call.name == TOOL_DATA_QUERY {
+        let needs_endpoint = call.name == TOOL_DATA_QUERY || call.name == TOOL_DATA_MUTATE;
+        let endpoint = if needs_endpoint {
             let ep = call
                 .arguments
                 .get("endpoint")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    ToolError::invalid_arguments("bmad_data_query requires 'endpoint' parameter")
+                    ToolError::invalid_arguments(format!("{} requires 'endpoint' parameter", call.name))
                 })?;
             Some(ep.to_string())
+        } else {
+            None
+        };
+
+        let payload = if call.name == TOOL_DATA_MUTATE {
+            call.arguments.get("payload").cloned()
         } else {
             None
         };
@@ -139,6 +168,7 @@ impl ToolProvider for BmadToolProvider {
             workflow_id: None,
             input: None,
             endpoint,
+            payload,
             workspace_dir: Some(self.config.base_dir.to_string_lossy().to_string()),
         };
 
@@ -163,16 +193,17 @@ mod tests {
     }
 
     #[test]
-    fn test_available_tools_returns_four() {
+    fn test_available_tools_returns_five() {
         let provider = BmadToolProvider::new(test_workspace_config());
         let tools = provider.available_tools();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bmad_validate_pack"));
         assert!(names.contains(&"bmad_list_workflows"));
         assert!(names.contains(&"bmad_list_plugins"));
         assert!(names.contains(&"bmad_data_query"));
+        assert!(names.contains(&"bmad_data_mutate"));
 
         // Verify descriptions are non-empty
         for tool in &tools {
@@ -183,14 +214,18 @@ mod tests {
             );
         }
 
-        // Verify all tools have Low sensitivity
+        // bmad_data_mutate should have Medium sensitivity, rest Low
         for tool in &tools {
-            assert_eq!(
-                tool.sensitivity,
-                ToolSensitivity::Low,
-                "tool {} should have Low sensitivity",
-                tool.name
-            );
+            if tool.name == "bmad_data_mutate" {
+                assert_eq!(tool.sensitivity, ToolSensitivity::Medium);
+            } else {
+                assert_eq!(
+                    tool.sensitivity,
+                    ToolSensitivity::Low,
+                    "tool {} should have Low sensitivity",
+                    tool.name
+                );
+            }
         }
     }
 

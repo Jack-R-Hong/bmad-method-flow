@@ -7,7 +7,7 @@
 
 use pulse_plugin_sdk::types::injection::InjectionQuery;
 use pulse_plugin_sdk::types::llm::{ToolCall, ToolSensitivity};
-use pulse_plugin_sdk::{HookPoint, PluginRegistry, match_skills};
+use pulse_plugin_sdk::{match_skills, HookPoint, PluginRegistry};
 
 // ── Registration structure ─────────────────────────────────────────────────
 
@@ -40,9 +40,15 @@ fn register_returns_config_injector_and_tool_provider() {
         }
     }
 
-    assert!(has_config_injector, "registration must include ConfigInjector");
+    assert!(
+        has_config_injector,
+        "registration must include ConfigInjector"
+    );
     assert!(has_tool_provider, "registration must include ToolProvider");
-    assert!(has_agent_def_provider, "registration must include AgentDefinitionProvider");
+    assert!(
+        has_agent_def_provider,
+        "registration must include AgentDefinitionProvider"
+    );
 }
 
 #[test]
@@ -121,16 +127,20 @@ fn registry_contains_bmad_tool_provider() {
 }
 
 #[test]
-fn registry_tool_sensitivity_all_low() {
+fn registry_tool_sensitivity_correct() {
     let registry = build_test_registry();
     let tools = registry.collect_tools("claude-code", "default", &InjectionQuery::new());
 
     for tool in &tools {
         if tool.name.starts_with("bmad_") {
+            let expected = if tool.name == "bmad_data_mutate" {
+                ToolSensitivity::Medium
+            } else {
+                ToolSensitivity::Low
+            };
             assert_eq!(
-                tool.sensitivity,
-                ToolSensitivity::Low,
-                "tool {} should have Low sensitivity",
+                tool.sensitivity, expected,
+                "tool {} has wrong sensitivity",
                 tool.name
             );
         }
@@ -324,8 +334,8 @@ async fn tool_dispatch_validate_pack() {
     assert!(!tool_result.is_error, "tool result should not be an error");
 
     // Verify valid JSON returned
-    let parsed: serde_json::Value = serde_json::from_str(&tool_result.content)
-        .expect("tool result should be valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&tool_result.content).expect("tool result should be valid JSON");
     assert!(
         parsed.get("plugins_ok").is_some() || parsed.get("valid").is_some(),
         "validate-pack result should have plugins_ok or valid field"
@@ -437,7 +447,10 @@ fn registry_collect_agents_returns_all_9_bmad_agents() {
     let registry = build_test_registry();
     let agents = registry.collect_agents(None);
 
-    let bmad_agents: Vec<_> = agents.iter().filter(|a| a.name.starts_with("bmad/")).collect();
+    let bmad_agents: Vec<_> = agents
+        .iter()
+        .filter(|a| a.name.starts_with("bmad/"))
+        .collect();
     assert_eq!(
         bmad_agents.len(),
         9,
@@ -486,7 +499,10 @@ fn registry_agents_have_skills_for_routing() {
     let registry = build_test_registry();
     let agents = registry.collect_agents(None);
 
-    let bmad_agents: Vec<_> = agents.iter().filter(|a| a.name.starts_with("bmad/")).collect();
+    let bmad_agents: Vec<_> = agents
+        .iter()
+        .filter(|a| a.name.starts_with("bmad/"))
+        .collect();
 
     for agent in &bmad_agents {
         assert!(
@@ -507,7 +523,10 @@ fn registry_skill_routing_finds_architect() {
         &agents,
         Some("balanced"),
     );
-    assert!(result.is_some(), "should find an agent for distributed systems + API design");
+    assert!(
+        result.is_some(),
+        "should find an agent for distributed systems + API design"
+    );
     assert_eq!(result.unwrap().name, "bmad/architect");
 }
 
@@ -516,12 +535,11 @@ fn registry_skill_routing_finds_dev() {
     let registry = build_test_registry();
     let agents = registry.collect_agents(None);
 
-    let result = match_skills(
-        &["code implementation".into()],
-        &agents,
-        Some("balanced"),
+    let result = match_skills(&["code implementation".into()], &agents, Some("balanced"));
+    assert!(
+        result.is_some(),
+        "should find an agent for code implementation"
     );
-    assert!(result.is_some(), "should find an agent for code implementation");
     assert_eq!(result.unwrap().name, "bmad/dev");
 }
 
