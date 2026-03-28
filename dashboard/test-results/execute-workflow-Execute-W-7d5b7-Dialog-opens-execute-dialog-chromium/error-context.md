@@ -1,0 +1,215 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - region "Notifications alt+T"
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - link "⚡ Pulse" [ref=e6] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e7]: ⚡
+          - generic [ref=e8]: Pulse
+        - button "Collapse sidebar" [ref=e9] [cursor=pointer]:
+          - img [ref=e10]
+      - button "DE Default 9 9" [ref=e12] [cursor=pointer]:
+        - generic [ref=e13]: DE
+        - generic [ref=e14]:
+          - generic [ref=e15]: Default
+          - generic [ref=e16]:
+            - img [ref=e17]
+            - text: "9"
+            - img [ref=e18]
+            - text: "9"
+        - img [ref=e19]
+      - navigation [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]: Overview
+          - link "Dashboard" [ref=e23] [cursor=pointer]:
+            - /url: /
+            - img [ref=e24]
+            - generic [ref=e25]: Dashboard
+          - link "Tasks 42" [ref=e26] [cursor=pointer]:
+            - /url: /tasks
+            - img [ref=e27]
+            - generic [ref=e28]: Tasks
+            - generic [ref=e29]: "42"
+          - link "Chat" [ref=e30] [cursor=pointer]:
+            - /url: /chat
+            - img [ref=e31]
+            - generic [ref=e32]: Chat
+        - generic [ref=e33]:
+          - generic [ref=e34]: Workspace
+          - link "Tasks" [ref=e35] [cursor=pointer]:
+            - /url: /workspace/tasks
+            - img [ref=e36]
+            - generic [ref=e37]: Tasks
+          - link "Workflows" [ref=e38] [cursor=pointer]:
+            - /url: /workflows
+            - img [ref=e39]
+            - generic [ref=e40]: Workflows
+          - link "Settings" [ref=e41] [cursor=pointer]:
+            - /url: /workspace
+            - img [ref=e42]
+            - generic [ref=e43]: Settings
+        - generic [ref=e44]:
+          - generic [ref=e45]: Operations
+          - link "Review Queue" [ref=e46] [cursor=pointer]:
+            - /url: /review
+            - img [ref=e47]
+            - generic [ref=e48]: Review Queue
+          - link "Errors" [ref=e49] [cursor=pointer]:
+            - /url: /errors
+            - img [ref=e50]
+            - generic [ref=e51]: Errors
+        - generic [ref=e52]:
+          - generic [ref=e53]: Insights
+          - link "Analytics" [ref=e54] [cursor=pointer]:
+            - /url: /analytics
+            - img [ref=e55]
+            - generic [ref=e56]: Analytics
+          - link "Activity Feed" [ref=e57] [cursor=pointer]:
+            - /url: /activity
+            - img [ref=e58]
+            - generic [ref=e59]: Activity Feed
+        - generic [ref=e60]:
+          - generic [ref=e61]: System
+          - link "Workflows" [ref=e62] [cursor=pointer]:
+            - /url: /system/workflows
+            - img [ref=e63]
+            - generic [ref=e64]: Workflows
+          - link "Agents" [ref=e65] [cursor=pointer]:
+            - /url: /agents
+            - img [ref=e66]
+            - generic [ref=e67]: Agents
+          - link "Skills" [ref=e68] [cursor=pointer]:
+            - /url: /skills
+            - img [ref=e69]
+            - generic [ref=e70]: Skills
+          - link "Plugins" [ref=e71] [cursor=pointer]:
+            - /url: /plugins
+            - img [ref=e72]
+            - generic [ref=e73]: Plugins
+          - link "LLM Providers" [ref=e74] [cursor=pointer]:
+            - /url: /settings/providers
+            - img [ref=e75]
+            - generic [ref=e76]: LLM Providers
+          - link "Settings" [ref=e77] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e78]
+            - generic [ref=e79]: Settings
+        - generic [ref=e81]:
+          - link "Coding Pack" [ref=e82] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/overview
+            - img [ref=e83]
+            - generic [ref=e84]: Coding Pack
+          - link "Workflows" [ref=e85] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/workflows
+            - generic [ref=e86]: Workflows
+          - link "AI Agents" [ref=e87] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/agents
+            - generic [ref=e88]: AI Agents
+          - link "Pack Status" [ref=e89] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/status
+            - generic [ref=e90]: Pack Status
+          - link "Execute Workflow" [ref=e91] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/execute
+            - generic [ref=e92]: Execute Workflow
+          - link "Execution Logs" [ref=e93] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/logs
+            - generic [ref=e94]: Execution Logs
+          - link "Workflow Detail" [ref=e95] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/workflows/:id
+            - generic [ref=e96]: Workflow Detail
+    - generic [ref=e97]:
+      - banner [ref=e98]:
+        - generic [ref=e99]:
+          - generic [ref=e100]: ● Connected
+          - generic [ref=e101]: "Last updated: 5s ago"
+          - button "Refresh dashboard data" [ref=e102] [cursor=pointer]: ↻
+          - button "Notifications disabled" [ref=e103]: 🔔
+      - main [ref=e104]:
+        - generic [ref=e105]:
+          - navigation "Breadcrumb" [ref=e106]:
+            - list [ref=e107]:
+              - listitem [ref=e108]:
+                - link "Dashboard" [ref=e109] [cursor=pointer]:
+                  - /url: /
+                - text: /
+              - listitem [ref=e110]:
+                - link "Plugins" [ref=e111] [cursor=pointer]:
+                  - /url: /plugins
+                - text: /
+              - listitem [ref=e112]:
+                - link "plugin-coding-pack" [ref=e113] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack
+                - text: /
+              - listitem [ref=e114]: Coding Pack
+          - generic [ref=e115]:
+            - heading "Coding Pack" [level=1] [ref=e116]
+            - paragraph [ref=e117]: Pack health, workflows, plugins, and AI agents at a glance
+          - generic [ref=e118]:
+            - complementary [ref=e119]:
+              - generic [ref=e120]:
+                - img [ref=e121]
+                - generic [ref=e122]: Coding Pack
+              - navigation [ref=e123]:
+                - link "Coding Pack" [ref=e124] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack/overview
+                  - generic [ref=e125]: Coding Pack
+                - link "Workflows" [ref=e126] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack/workflows
+                  - generic [ref=e127]: Workflows
+                - link "AI Agents" [ref=e128] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack/agents
+                  - generic [ref=e129]: AI Agents
+                - link "Pack Status" [ref=e130] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack/status
+                  - generic [ref=e131]: Pack Status
+                - link "Execute Workflow" [ref=e132] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack/execute
+                  - generic [ref=e133]: Execute Workflow
+                - link "Execution Logs" [ref=e134] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack/logs
+                  - generic [ref=e135]: Execution Logs
+                - link "Workflow Detail" [ref=e136] [cursor=pointer]:
+                  - /url: /plugins/plugin-coding-pack/workflows/:id
+                  - generic [ref=e137]: Workflow Detail
+            - generic [ref=e139]:
+              - generic [ref=e140]:
+                - heading "Coding Pack" [level=1] [ref=e141]
+                - paragraph [ref=e142]: Pack health, workflows, plugins, and AI agents at a glance
+              - main [ref=e143]:
+                - region "Detail view" [ref=e144]:
+                  - generic [ref=e145]:
+                    - region "Pack Health" [ref=e146]:
+                      - heading "Pack Health" [level=3] [ref=e147]
+                      - generic [ref=e148]:
+                        - generic [ref=e149]:
+                          - term [ref=e150]: Valid
+                          - definition [ref=e151]: —
+                        - generic [ref=e152]:
+                          - term [ref=e153]: Plugins OK
+                          - definition [ref=e154]: —
+                        - generic [ref=e155]:
+                          - term [ref=e156]: Workflows Found
+                          - definition [ref=e157]: —
+                    - region "Workflows" [ref=e158]:
+                      - heading "Workflows" [level=3] [ref=e159]
+                      - generic [ref=e160]:
+                        - generic [ref=e161]:
+                          - term [ref=e162]: Total Workflows
+                          - definition [ref=e163]: —
+                        - generic [ref=e164]:
+                          - term [ref=e165]: Categories
+                          - definition [ref=e166]: —
+                    - region "Installed Plugins" [ref=e167]:
+                      - heading "Installed Plugins" [level=3] [ref=e168]
+                      - generic [ref=e169]:
+                        - generic [ref=e170]:
+                          - term [ref=e171]: Plugin Count
+                          - definition [ref=e172]: "8"
+                        - generic [ref=e173]:
+                          - term [ref=e174]: Plugin List
+                          - definition [ref=e175]: "{ \"executable\": true, \"name\": \"plugin-coding-pack\", \"size_bytes\": 5896480 }, { \"executable\": true, \"name\": \"bmad-method\", \"size_bytes\": 895360 }, { \"executable\": true, \"name\": \"plugin-memory\", \"size_bytes\": 11704 }, { \"executable\": true, \"name\": \"plugin-git-worktree\", \"size_bytes\": 1004000 }, { \"executable\": true, \"name\": \"plugin-git-ops\", \"size_bytes\": 1998288 }, { \"executable\": true, \"name\": \"plugin-git-pr\", \"size_bytes\": 8519 }, { \"executable\": true, \"name\": \"plugin-board\", \"size_bytes\": 5619192 }, { \"executable\": true, \"name\": \"provider-claude-code\", \"size_bytes\": 5245896 }"
+```

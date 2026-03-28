@@ -28,7 +28,7 @@ The defining capability is **self-bootstrapping**: the plugins develop themselve
 ## Quick Start
 
 ```bash
-# From bmad-method-flow directory
+# From coding-pack directory
 # Build the plugin
 cargo build --release
 
@@ -196,7 +196,7 @@ Aggregates validation + workflows + plugins into a single health report.
 ### Project Structure
 
 ```
-bmad-method-flow/
+coding-pack/
 ├── Cargo.toml                  # Rust package manifest
 ├── src/
 │   ├── lib.rs                  # CodingPackPlugin (PluginLifecycle + StepExecutorPlugin)

@@ -7,8 +7,8 @@
   },
   "mode": "initial_scan",
   "scan_level": "quick",
-  "project_root": "/home/jack/Document/pulse-plugins/bmad-method-flow",
-  "project_knowledge": "/home/jack/Document/pulse-plugins/bmad-method-flow/docs",
+  "project_root": "/home/jack/Document/pulse-plugins/coding-pack",
+  "project_knowledge": "/home/jack/Document/pulse-plugins/coding-pack/docs",
   "project_types": [
     {
       "part_id": "main",

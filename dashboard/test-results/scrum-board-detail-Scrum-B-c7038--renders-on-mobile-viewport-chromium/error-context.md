@@ -1,0 +1,137 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - region "Notifications alt+T"
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "⚡ Pulse" [ref=e6] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e7]: ⚡
+        - generic [ref=e8]: Pulse
+      - button "DE Default 9 9" [ref=e10] [cursor=pointer]:
+        - generic [ref=e11]: DE
+        - generic [ref=e12]:
+          - generic [ref=e13]: Default
+          - generic [ref=e14]:
+            - img [ref=e15]
+            - text: "9"
+            - img [ref=e16]
+            - text: "9"
+        - img [ref=e17]
+      - navigation [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: Overview
+          - link "Dashboard" [ref=e21] [cursor=pointer]:
+            - /url: /
+            - img [ref=e22]
+            - generic [ref=e23]: Dashboard
+          - link "Tasks 42" [ref=e24] [cursor=pointer]:
+            - /url: /tasks
+            - img [ref=e25]
+            - generic [ref=e26]: Tasks
+            - generic [ref=e27]: "42"
+          - link "Chat" [ref=e28] [cursor=pointer]:
+            - /url: /chat
+            - img [ref=e29]
+            - generic [ref=e30]: Chat
+        - generic [ref=e31]:
+          - generic [ref=e32]: Workspace
+          - link "Tasks" [ref=e33] [cursor=pointer]:
+            - /url: /workspace/tasks
+            - img [ref=e34]
+            - generic [ref=e35]: Tasks
+          - link "Workflows" [ref=e36] [cursor=pointer]:
+            - /url: /workflows
+            - img [ref=e37]
+            - generic [ref=e38]: Workflows
+          - link "Settings" [ref=e39] [cursor=pointer]:
+            - /url: /workspace
+            - img [ref=e40]
+            - generic [ref=e41]: Settings
+        - generic [ref=e42]:
+          - generic [ref=e43]: Operations
+          - link "Review Queue" [ref=e44] [cursor=pointer]:
+            - /url: /review
+            - img [ref=e45]
+            - generic [ref=e46]: Review Queue
+          - link "Errors" [ref=e47] [cursor=pointer]:
+            - /url: /errors
+            - img [ref=e48]
+            - generic [ref=e49]: Errors
+        - generic [ref=e50]:
+          - generic [ref=e51]: Insights
+          - link "Analytics" [ref=e52] [cursor=pointer]:
+            - /url: /analytics
+            - img [ref=e53]
+            - generic [ref=e54]: Analytics
+          - link "Activity Feed" [ref=e55] [cursor=pointer]:
+            - /url: /activity
+            - img [ref=e56]
+            - generic [ref=e57]: Activity Feed
+        - generic [ref=e58]:
+          - generic [ref=e59]: System
+          - link "Workflows" [ref=e60] [cursor=pointer]:
+            - /url: /system/workflows
+            - img [ref=e61]
+            - generic [ref=e62]: Workflows
+          - link "Agents" [ref=e63] [cursor=pointer]:
+            - /url: /agents
+            - img [ref=e64]
+            - generic [ref=e65]: Agents
+          - link "Skills" [ref=e66] [cursor=pointer]:
+            - /url: /skills
+            - img [ref=e67]
+            - generic [ref=e68]: Skills
+          - link "Plugins" [ref=e69] [cursor=pointer]:
+            - /url: /plugins
+            - img [ref=e70]
+            - generic [ref=e71]: Plugins
+          - link "LLM Providers" [ref=e72] [cursor=pointer]:
+            - /url: /settings/providers
+            - img [ref=e73]
+            - generic [ref=e74]: LLM Providers
+          - link "Settings" [ref=e75] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e76]
+            - generic [ref=e77]: Settings
+        - generic [ref=e79]:
+          - link "Coding Pack" [ref=e80] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/overview
+            - img [ref=e81]
+            - generic [ref=e82]: Coding Pack
+          - link "Workflows" [ref=e83] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/workflows
+            - generic [ref=e84]: Workflows
+          - link "AI Agents" [ref=e85] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/agents
+            - generic [ref=e86]: AI Agents
+          - link "Pack Status" [ref=e87] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/status
+            - generic [ref=e88]: Pack Status
+          - link "Execute Workflow" [ref=e89] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/execute
+            - generic [ref=e90]: Execute Workflow
+          - link "Execution Logs" [ref=e91] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/logs
+            - generic [ref=e92]: Execution Logs
+          - link "Workflow Detail" [ref=e93] [cursor=pointer]:
+            - /url: /plugins/plugin-coding-pack/workflows/:id
+            - generic [ref=e94]: Workflow Detail
+    - generic [ref=e95]:
+      - banner [ref=e96]:
+        - button "Toggle menu" [ref=e97] [cursor=pointer]:
+          - img [ref=e98]
+        - generic [ref=e99]:
+          - generic [ref=e100]: ● Connected
+          - generic [ref=e101]: "Last updated: 5s ago"
+          - button "Refresh dashboard data" [ref=e102] [cursor=pointer]: ↻
+          - button "Notifications disabled" [ref=e103]: 🔔
+      - main [ref=e104]:
+        - generic [ref=e105]:
+          - heading "Something went wrong" [level=2] [ref=e107]
+          - generic [ref=e108]:
+            - generic [ref=e109]: Page "board" not found in plugin "plugin-coding-pack"
+            - link "Return to Dashboard" [ref=e110] [cursor=pointer]:
+              - /url: /
+```

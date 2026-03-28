@@ -20,7 +20,7 @@ steps:
         - git-ops: Git operations (commit, push, branch, PR)
         - git-worktree: Git worktree isolation for parallel dev
         - bmad-method: BMAD AI team (12 agents as step executor)
-        - bmad-method-flow: BMAD content + Pulse config (this repo)
+        - coding-pack: BMAD content + Pulse config (this repo)
 
         Plan the change with awareness that these plugins are used to develop themselves.
         Consider: backward compatibility, build order, circular dependency risks.
