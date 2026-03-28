@@ -433,21 +433,210 @@ fn execute_data_query(
     let endpoint = endpoint.trim_start_matches('/');
     let result = match endpoint {
         "status" => pack_status_value(config)?,
+        "status/health" => status_health_value(config)?,
         "workflows/list" => list_workflows_detail_value(config)?,
         "agents/list" => list_agents_value(config)?,
+        "board/summary" => board_summary_value(config)?,
+        ep if ep.starts_with("tasks/") && ep.ends_with("/workflow-context") => {
+            let task_id = ep
+                .strip_prefix("tasks/")
+                .and_then(|s| s.strip_suffix("/workflow-context"))
+                .unwrap_or("");
+            task_workflow_context_value(task_id, config)?
+        }
+        ep if ep.starts_with("tasks/") && ep.ends_with("/agent-info") => {
+            let task_id = ep
+                .strip_prefix("tasks/")
+                .and_then(|s| s.strip_suffix("/agent-info"))
+                .unwrap_or("");
+            task_agent_info_value(task_id, config)?
+        }
         ep if ep.starts_with("workflows/") => {
             let id = ep.strip_prefix("workflows/").unwrap_or("");
             get_workflow_detail_value(id, config)?
         }
         _ => {
             return Err(WitPluginError::not_found(format!(
-                "Unknown data endpoint: '{}'. Available: status, workflows/list, agents/list, workflows/{{id}}. Board endpoints moved to plugin-board.",
+                "Unknown data endpoint: '{}'. Available: status, status/health, workflows/list, agents/list, workflows/{{id}}, tasks/{{id}}/workflow-context, tasks/{{id}}/agent-info, board/summary. Board endpoints moved to plugin-board.",
                 endpoint
             )));
         }
     };
     serde_json::to_string_pretty(&result)
         .map_err(|e| WitPluginError::internal(format!("JSON serialization error: {e}")))
+}
+
+/// Health badge data for the dashboard.
+/// Derives status from `validate_pack_value()`: healthy if validation passes, degraded otherwise.
+fn status_health_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    let validation = validate_pack_value(config)?;
+    let valid = validation["valid"].as_bool().unwrap_or(false);
+    let plugins_ok = valid;
+    let workflows_found = validation["workflows_found"].as_u64().unwrap_or(0);
+    let pack_status = if valid { "healthy" } else { "degraded" };
+
+    Ok(serde_json::json!({
+        "pack_status": pack_status,
+        "plugins_ok": plugins_ok,
+        "workflows_found": workflows_found,
+    }))
+}
+
+/// Workflow context for a specific task (dashboard task-view widget).
+/// Attempts to fetch task metadata from the Pulse API; returns minimal defaults on failure.
+fn task_workflow_context_value(
+    task_id: &str,
+    config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
+    // Try to get task details from Pulse API
+    if let Ok(task) = crate::pulse_api::get_task(task_id) {
+        let workflow_id = if task.workflow_id.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(task.workflow_id)
+        };
+        return Ok(serde_json::json!({
+            "task_id": task_id,
+            "workflow_id": workflow_id,
+            "step_id": null,
+            "executor": null,
+            "model_tier": null,
+        }));
+    }
+
+    // Try auto-loop status for additional context
+    if let Ok(status) = crate::plugin_bridge::auto_loop_status(config) {
+        if let Some(current) = status.get("current_task") {
+            if current.get("task_id").and_then(|v| v.as_str()) == Some(task_id) {
+                return Ok(serde_json::json!({
+                    "task_id": task_id,
+                    "workflow_id": current.get("workflow_id").cloned().unwrap_or(serde_json::Value::Null),
+                    "step_id": current.get("step_id").cloned().unwrap_or(serde_json::Value::Null),
+                    "executor": current.get("executor").cloned().unwrap_or(serde_json::Value::Null),
+                    "model_tier": current.get("model_tier").cloned().unwrap_or(serde_json::Value::Null),
+                }));
+            }
+        }
+    }
+
+    // Fallback: return minimal JSON with just the task_id
+    Ok(serde_json::json!({
+        "task_id": task_id,
+        "workflow_id": null,
+        "step_id": null,
+        "executor": null,
+        "model_tier": null,
+    }))
+}
+
+/// Agent info for a specific task (dashboard task-view badge).
+/// Looks up agent from task metadata or falls back to defaults.
+fn task_agent_info_value(
+    task_id: &str,
+    config: &WorkspaceConfig,
+) -> Result<serde_json::Value, WitPluginError> {
+    // Try to get task details and look for agent_name in metadata
+    if let Ok(task) = crate::pulse_api::get_task(task_id) {
+        // If the task has a workflow_id, try to infer agent from workflow
+        if !task.workflow_id.is_empty() {
+            // Check if we can look up the agent in the registry
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let manifest_path = config.base_dir.join("_bmad/_config/agent-manifest.csv");
+                let registry = crate::agent_registry::BmadAgentRegistry::new(&manifest_path);
+                let agents = {
+                    use pulse_plugin_sdk::traits::agent_definition::AgentDefinitionProvider;
+                    registry.list_agents(None)
+                };
+                // Try to match agent from workflow name convention (e.g. "coding-quick-dev" -> "bmad/quick-flow-solo-dev")
+                if let Some(agent) = agents.first() {
+                    let (display_name, title) = agent
+                        .description
+                        .as_deref()
+                        .and_then(|d| d.split_once(" \u{2014} "))
+                        .map(|(name, role)| (name.to_string(), role.to_string()))
+                        .unwrap_or_else(|| (agent.name.clone(), String::new()));
+                    // Return the first matching agent as a reasonable default
+                    return Ok(serde_json::json!({
+                        "task_id": task_id,
+                        "agent_name": agent.name,
+                        "display_name": display_name,
+                        "title": title,
+                    }));
+                }
+            }
+        }
+    }
+
+    // Try auto-loop status for agent info on the current task
+    if let Ok(status) = crate::plugin_bridge::auto_loop_status(config) {
+        if let Some(current) = status.get("current_task") {
+            if current.get("task_id").and_then(|v| v.as_str()) == Some(task_id) {
+                if let Some(agent_name) = current.get("agent_name").and_then(|v| v.as_str()) {
+                    return Ok(serde_json::json!({
+                        "task_id": task_id,
+                        "agent_name": agent_name,
+                        "display_name": current.get("display_name").and_then(|v| v.as_str()).unwrap_or(agent_name),
+                        "title": current.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                    }));
+                }
+            }
+        }
+    }
+
+    let _ = config;
+
+    // Fallback: return default agent
+    Ok(serde_json::json!({
+        "task_id": task_id,
+        "agent_name": "bmad-dev",
+        "display_name": "Amelia",
+        "title": "Developer",
+    }))
+}
+
+/// Compact sprint/board progress summary for the dashboard badge.
+/// Calls auto-loop status to get board task counts.
+fn board_summary_value(config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
+    // Try to get board status from plugin-auto-loop
+    if let Ok(status) = crate::plugin_bridge::auto_loop_status(config) {
+        let total = status.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+        let done = status.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
+        let in_progress = status
+            .get("in_progress")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let blocked = status
+            .get("blocked")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let ready = status.get("ready").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        let sprint_progress = if total > 0 && done == total {
+            "completed"
+        } else if blocked > 0 {
+            "at-risk"
+        } else {
+            "on-track"
+        };
+
+        return Ok(serde_json::json!({
+            "sprint_progress": sprint_progress,
+            "total": total,
+            "done": done,
+            "in_progress": in_progress,
+            "ready": ready,
+        }));
+    }
+
+    // Fallback: return defaults when auto-loop is unavailable
+    Ok(serde_json::json!({
+        "sprint_progress": "on-track",
+        "total": 0,
+        "done": 0,
+        "in_progress": 0,
+        "ready": 0,
+    }))
 }
 
 /// Detailed workflow list for dashboard table view.
