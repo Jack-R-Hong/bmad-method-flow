@@ -21,7 +21,6 @@ Load config from `{project-root}/_bmad/bmm/config.yaml` and resolve:
 
 All paths are resolved relative to `{project-root}`:
 
-- `BOARD_STORE` = `{project-root}/_bmad-output/board-store.json`
 - `PLUGIN_BINARY` = `{project-root}/config/plugins/plugin-coding-pack`
 - `PLUGIN_RPC` = the plugin binary, called via JSON-RPC stdin/stdout
 
@@ -34,7 +33,16 @@ Discover the Pulse installation:
 
 - Check if Pulse is running: `curl -s http://localhost:3000 | head -1`
 - If not running, inform the user and continue without dashboard sync
-- If running, board changes will be visible in the dashboard after deploy
+- If running, board changes will be visible in the dashboard immediately
+
+### Board Data Source
+
+Board data lives in the **Pulse server** (managed by `plugin-board`), not in a local file. All board reads and writes go through the plugin binary via JSON-RPC:
+
+- **Read board:** send a `data-query` RPC with endpoint `board/assignments/list`
+- **Mutate board:** send a `data-mutate` RPC with the appropriate endpoint (see JSON-RPC Protocol section)
+
+The plugin binary delegates to `plugin-board` on the server via SDK capability calls, with HTTP fallback to the Pulse API.
 
 ---
 
@@ -44,7 +52,7 @@ Parse the user's intent and execute the matching section.
 
 ### "status" / "show board" / "board status"
 
-Read `{BOARD_STORE}` directly (or query via plugin RPC) and display a Kanban summary:
+Query the board via plugin RPC (`data-query`, endpoint `board/assignments/list`) and display a Kanban summary:
 
 ```
 [backlog]        (N cards)
@@ -73,7 +81,7 @@ Ask the user for any missing required fields.
 Execute the full auto-dev cycle:
 
 #### Step 1: Read the board
-Read `{BOARD_STORE}`. Find the highest-priority `ready-for-dev` assignment.
+Query the board via plugin RPC (`data-query`, endpoint `board/assignments/list`). Find the highest-priority `ready-for-dev` assignment.
 If none found, tell the user and stop.
 
 #### Step 2: Claim the task
@@ -114,13 +122,8 @@ Build the plugin and deploy to Pulse:
 1. `cd {project-root} && cargo build --release`
 2. Find and stop the running Pulse server
 3. Copy the release binary to Pulse's `config/plugins/`
-4. Ensure `{BOARD_STORE}` is symlinked into Pulse's `_bmad-output/`
-5. Restart Pulse server
-6. Verify with `curl -s http://localhost:3000 | head -1`
-
-### "clear" / "clear board"
-
-Remove `{BOARD_STORE}` to reset the Task Board.
+4. Restart Pulse server
+5. Verify with `curl -s http://localhost:3000 | head -1`
 
 ### "watch" / "run all tasks"
 
@@ -130,7 +133,8 @@ Loop the "next" command until no `ready-for-dev` tasks remain.
 
 ## JSON-RPC PROTOCOL
 
-All board mutations go through the plugin binary via stdin JSON-RPC.
+All board reads and mutations go through the plugin binary via stdin JSON-RPC.
+The plugin binary delegates to `plugin-board` on the Pulse server.
 
 **Base format:**
 ```json
