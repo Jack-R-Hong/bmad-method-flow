@@ -1,7 +1,8 @@
-//! E2E test harness for workflow executor integration testing.
+//! E2E test harness for workflow integration testing.
 //!
-//! Provides helpers for setting up test fixtures, running workflows,
-//! and asserting step outcomes.
+//! After the platform plugin refactor, workflow execution is delegated to
+//! plugin-auto-loop via plugin_bridge. This harness provides helpers for
+//! setting up test fixtures and asserting step outcomes.
 
 use std::path::{Path, PathBuf};
 
@@ -46,14 +47,14 @@ impl E2EHarness {
         })
     }
 
-    /// Submit a workflow and return the execution result JSON.
+    /// Submit a workflow via plugin_bridge and return the execution result JSON.
     pub fn submit_workflow(
         &self,
         workflow_id: &str,
         input: &str,
     ) -> Result<serde_json::Value, String> {
-        // Use the project's executor directly
-        plugin_coding_pack::executor::execute_workflow(workflow_id, input)
+        let config = plugin_coding_pack::workspace::WorkspaceConfig::from_base_dir(&self.work_dir);
+        plugin_coding_pack::plugin_bridge::execute_workflow(workflow_id, input, &config)
             .map_err(|e| format!("workflow execution failed: {}", e.message))
     }
 

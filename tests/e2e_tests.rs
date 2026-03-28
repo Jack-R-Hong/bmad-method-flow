@@ -1,7 +1,8 @@
-//! E2E integration tests for the workflow executor.
+//! E2E integration tests for the workflow execution pipeline.
 //!
-//! These tests require real plugin binaries and (for full workflow tests)
-//! the Claude CLI with valid API credentials.
+//! After the platform plugin refactor, workflow execution is delegated to
+//! platform plugins via plugin_bridge. These tests require real plugin
+//! binaries and a running Pulse server for full workflow tests.
 //!
 //! Gate: Set PULSE_E2E_ENABLED=1 to run ignored tests.
 
@@ -31,10 +32,10 @@ fn harness_lifecycle() {
     assert!(harness.work_dir.join(".git").exists());
 }
 
-/// Story 11.2: Happy path E2E — requires claude CLI.
-/// Submits a feature-dev workflow and verifies all steps complete.
+/// Story 11.2: Happy path E2E — requires Pulse server + platform plugins.
+/// Submits a feature-dev workflow via plugin_bridge and verifies completion.
 #[test]
-#[ignore = "Requires claude CLI and API key. Set PULSE_E2E_ENABLED=1"]
+#[ignore = "Requires Pulse server with platform plugins. Set PULSE_E2E_ENABLED=1"]
 fn happy_path_feature_dev() {
     if std::env::var("PULSE_E2E_ENABLED").as_deref() != Ok("1") {
         return;
@@ -58,7 +59,7 @@ fn happy_path_feature_dev() {
 
 /// Story 11.3: Failure path — quality gate blocks commit when tests fail.
 #[test]
-#[ignore = "Requires claude CLI and API key. Set PULSE_E2E_ENABLED=1"]
+#[ignore = "Requires Pulse server with platform plugins. Set PULSE_E2E_ENABLED=1"]
 fn failure_path_quality_gate_blocks() {
     if std::env::var("PULSE_E2E_ENABLED").as_deref() != Ok("1") {
         return;
@@ -86,7 +87,7 @@ fn failure_path_quality_gate_blocks() {
 
 /// Story 11.4: Retry loop E2E — validates self-correction.
 #[test]
-#[ignore = "Requires claude CLI and API key. Set PULSE_E2E_ENABLED=1"]
+#[ignore = "Requires Pulse server with platform plugins. Set PULSE_E2E_ENABLED=1"]
 fn retry_loop_self_correction() {
     if std::env::var("PULSE_E2E_ENABLED").as_deref() != Ok("1") {
         return;

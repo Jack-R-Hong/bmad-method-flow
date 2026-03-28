@@ -1,26 +1,15 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agent_registry;
-pub mod auto_dev;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod board_client;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config_injector;
-pub mod executor;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod github_client;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod github_sync;
 pub mod pack;
+pub mod plugin_bridge;
 pub mod pulse_api;
-pub mod session;
-pub mod test_parser;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tool_provider;
 pub mod util;
 pub mod validator;
 pub mod workspace;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod worktree_tracker;
 
 use pulse_plugin_sdk::error::WitPluginError;
 use pulse_plugin_sdk::wit_traits::{DashboardExtensionPlugin, PluginLifecycle, StepExecutorPlugin};

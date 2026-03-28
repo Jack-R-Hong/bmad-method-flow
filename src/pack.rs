@@ -36,15 +36,39 @@ pub struct CodingPackInput {
 }
 
 /// Execute a pack-level action.
+///
+/// Actions that previously called into local modules (auto_dev, executor,
+/// github_client, github_sync, worktree_tracker) now delegate to platform
+/// plugins via `plugin_bridge`.
 pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError> {
     let config = WorkspaceConfig::resolve(input.workspace_dir.as_deref());
 
     match input.action.as_str() {
+        // ── Local pack operations (no delegation needed) ───────────────
         "validate-pack" => to_json_string(validate_pack_value(&config)),
         "validate-workflows" => to_json_string(validate_workflows_value(&config)),
         "list-workflows" => to_json_string(list_workflows_value(&config)),
         "list-plugins" => to_json_string(list_plugins_value(&config)),
         "status" => to_json_string(pack_status_value(&config)),
+        "data-query" => {
+            let endpoint = input.endpoint.as_deref().unwrap_or("");
+            execute_data_query(endpoint, &config, input.workspace.as_deref(), input.board_id.as_deref())
+        }
+        "data-mutate" => {
+            let endpoint = input.endpoint.as_deref().unwrap_or("");
+            let payload = input.payload.clone().unwrap_or(serde_json::Value::Null);
+            execute_data_mutate(endpoint, &payload, &config, input.workspace.as_deref(), input.board_id.as_deref())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "generate-agents-yaml" => {
+            to_json_string(generate_agents_yaml(&config))
+        }
+        #[cfg(target_arch = "wasm32")]
+        "generate-agents-yaml" => {
+            Err(WitPluginError::internal("generate-agents-yaml is not available in WASM builds"))
+        }
+
+        // ── Delegated to plugin-auto-loop via plugin_bridge ────────────
         "execute-workflow" => {
             let workflow_id = input.workflow_id.as_deref().ok_or_else(|| {
                 WitPluginError::invalid_input("execute-workflow requires 'workflow_id'")
@@ -56,24 +80,15 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
                 )));
             }
             let user_input = input.input.as_deref().unwrap_or("");
-            to_json_string(crate::executor::execute_workflow_with_config(
+            to_json_string(crate::plugin_bridge::execute_workflow(
                 workflow_id,
                 user_input,
                 &config,
             ))
         }
-        "data-query" => {
-            let endpoint = input.endpoint.as_deref().unwrap_or("");
-            execute_data_query(endpoint, &config, input.workspace.as_deref(), input.board_id.as_deref())
-        }
-        "data-mutate" => {
-            let endpoint = input.endpoint.as_deref().unwrap_or("");
-            let payload = input.payload.clone().unwrap_or(serde_json::Value::Null);
-            execute_data_mutate(endpoint, &payload, &config, input.workspace.as_deref(), input.board_id.as_deref())
-        }
-        "auto-dev-status" => to_json_string(crate::auto_dev::auto_dev_status(&config)),
+        "auto-dev-status" => to_json_string(crate::plugin_bridge::auto_loop_status(&config)),
         "auto-dev-next" => {
-            let result = crate::auto_dev::auto_dev_next(&config)?;
+            let result = crate::plugin_bridge::auto_loop_next(&config)?;
             match result {
                 Some(r) => to_json_string(
                     serde_json::to_value(&r)
@@ -89,74 +104,33 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
                 .and_then(|p| p.get("max_iterations"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
-            let results = crate::auto_dev::auto_dev_watch(&config, max)?;
+            let results = crate::plugin_bridge::auto_loop_watch(&config, max)?;
             to_json_string(
                 serde_json::to_value(&results)
                     .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
             )
         }
-        #[cfg(not(target_arch = "wasm32"))]
+
+        // ── Delegated to plugin-issue-sync via plugin_bridge ───────────
         "sync-github-issues" => {
-            let result = crate::github_sync::sync_issues_to_board(&config)?;
-            to_json_string(
-                serde_json::to_value(&result)
-                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
-            )
+            to_json_string(crate::plugin_bridge::sync_github_issues(&config))
         }
-        #[cfg(target_arch = "wasm32")]
-        "sync-github-issues" => {
-            Err(WitPluginError::internal("sync-github-issues not available in WASM"))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
+
+        // ── Delegated to plugin-workspace-tracker via plugin_bridge ────
         "cleanup-worktrees" => {
-            let result = crate::worktree_tracker::cleanup_completed_worktrees(&config)?;
-            to_json_string(
-                serde_json::to_value(&result)
-                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
-            )
+            to_json_string(crate::plugin_bridge::cleanup_worktrees(&config))
         }
-        #[cfg(target_arch = "wasm32")]
-        "cleanup-worktrees" => {
-            Err(WitPluginError::internal("cleanup-worktrees not available in WASM"))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         "worktree-status" => {
-            to_json_string(crate::worktree_tracker::worktree_status(&config))
+            to_json_string(crate::plugin_bridge::worktree_status(&config))
         }
-        #[cfg(target_arch = "wasm32")]
-        "worktree-status" => {
-            Err(WitPluginError::internal("worktree-status not available in WASM"))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         "recover-worktrees" => {
-            let result = crate::worktree_tracker::recover_orphaned_worktrees(&config)?;
-            to_json_string(
-                serde_json::to_value(&result)
-                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
-            )
+            to_json_string(crate::plugin_bridge::recover_worktrees(&config))
         }
-        #[cfg(target_arch = "wasm32")]
-        "recover-worktrees" => {
-            Err(WitPluginError::internal("recover-worktrees not available in WASM"))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        "generate-agents-yaml" => {
-            to_json_string(generate_agents_yaml(&config))
-        }
-        #[cfg(target_arch = "wasm32")]
-        "generate-agents-yaml" => {
-            Err(WitPluginError::internal("generate-agents-yaml is not available in WASM builds"))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
+
+        // ── Delegated to plugin-feedback-loop via plugin_bridge ────────
         "check-pr-reviews" => {
-            let result = check_pr_reviews_value(&config)?;
-            to_json_string(Ok(result))
+            to_json_string(crate::plugin_bridge::check_pr_reviews(&config))
         }
-        #[cfg(target_arch = "wasm32")]
-        "check-pr-reviews" => {
-            Err(WitPluginError::internal("check-pr-reviews not available in WASM"))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         "build-fix-context" => {
             let pr_number = input
                 .payload
@@ -168,49 +142,14 @@ pub fn execute_action(input: &CodingPackInput) -> Result<String, WitPluginError>
                         "build-fix-context requires 'pr_number' in payload",
                     )
                 })?;
-            let client = crate::github_client::GitHubClient::new()?;
-            let ctx = client.build_fix_context(pr_number)?;
-            to_json_string(
-                serde_json::to_value(&ctx)
-                    .map_err(|e| WitPluginError::internal(format!("JSON error: {e}"))),
-            )
+            to_json_string(crate::plugin_bridge::build_fix_context(pr_number))
         }
-        #[cfg(target_arch = "wasm32")]
-        "build-fix-context" => {
-            Err(WitPluginError::internal("build-fix-context not available in WASM"))
-        }
+
         other => Err(WitPluginError::not_found(format!(
             "Unknown action: '{}'. Available: validate-pack, validate-workflows, list-workflows, list-plugins, status, execute-workflow, data-query, data-mutate, auto-dev-status, auto-dev-next, auto-dev-watch, sync-github-issues, cleanup-worktrees, worktree-status, recover-worktrees, check-pr-reviews, build-fix-context, generate-agents-yaml",
             other
         ))),
     }
-}
-
-/// Check all open auto-dev PRs for review status.
-#[cfg(not(target_arch = "wasm32"))]
-fn check_pr_reviews_value(_config: &WorkspaceConfig) -> Result<serde_json::Value, WitPluginError> {
-    let client = crate::github_client::GitHubClient::new()?;
-    let prs = client.list_open_prs()?;
-
-    let auto_dev_prs: Vec<&crate::github_client::PullRequest> = prs
-        .iter()
-        .filter(|pr| crate::github_client::is_auto_dev_pr(pr))
-        .collect();
-
-    let mut results = Vec::new();
-    for pr in auto_dev_prs {
-        let reviews = client.list_pr_reviews(pr.number)?;
-        let review_state = crate::github_client::aggregate_review_state(&reviews);
-        results.push(serde_json::json!({
-            "pr_number": pr.number,
-            "title": pr.title,
-            "branch": pr.head.ref_field,
-            "review_state": review_state,
-            "html_url": pr.html_url,
-        }));
-    }
-
-    Ok(serde_json::Value::Array(results))
 }
 
 /// Generate agents.yaml ACL configuration from the BMAD agent registry.
@@ -750,88 +689,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cleanup_worktrees_action_dispatch() {
-        let tmp = tempfile::tempdir().unwrap();
-        // init git repo so git commands work
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        let input = test_input_with_workspace("cleanup-worktrees", tmp.path().to_str().unwrap());
-        let result = execute_action(&input).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(parsed.get("removed").is_some());
-        assert!(parsed.get("skipped").is_some());
-        assert!(parsed.get("errors").is_some());
-    }
-
-    #[test]
-    fn worktree_status_action_dispatch() {
-        let tmp = tempfile::tempdir().unwrap();
-        let input = test_input_with_workspace("worktree-status", tmp.path().to_str().unwrap());
-        let result = execute_action(&input).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(parsed.get("worktrees").is_some());
-        assert!(parsed.get("total").is_some());
-        assert!(parsed.get("by_status").is_some());
-    }
-
-    #[test]
-    fn recover_worktrees_action_dispatch() {
-        let tmp = tempfile::tempdir().unwrap();
-        // init git repo so git worktree prune and list work
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        let input = test_input_with_workspace("recover-worktrees", tmp.path().to_str().unwrap());
-        let result = execute_action(&input).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(parsed.get("pruned").is_some());
-        assert!(parsed.get("cleaned").is_some());
-        assert!(parsed.get("errors").is_some());
-    }
-
-    // ── Story 23-1: check-pr-reviews action recognized ──────────────
-
-    #[test]
-    fn check_pr_reviews_action_is_recognized() {
-        // Verify the action is dispatched (will fail due to no GITHUB_TOKEN, not "not_found")
-        let input = test_input("check-pr-reviews");
-        let err = execute_action(&input).unwrap_err();
-        // Should be invalid_input (no GITHUB_TOKEN), not not_found
-        assert_ne!(
-            err.code, "not_found",
-            "check-pr-reviews should be in the dispatch table"
-        );
-    }
-
-    // ── Story 23-2: build-fix-context action recognized ─────────────
-
-    #[test]
-    fn build_fix_context_action_recognized() {
-        // Without pr_number in payload -> invalid_input, NOT not_found
-        let input = test_input("build-fix-context");
-        let err = execute_action(&input).unwrap_err();
-        assert_eq!(
-            err.code, "invalid_input",
-            "build-fix-context should be recognized and require pr_number"
-        );
-    }
-
     // ── Story 25-5: generate-agents-yaml ──────────────────────────────
 
     fn make_test_workspace_config() -> WorkspaceConfig {
@@ -1182,6 +1039,21 @@ mod tests {
         assert!(
             arr.is_empty(),
             "should return empty array when manifest is missing"
+        );
+    }
+
+    // ── Delegated action dispatch tests ───────────────────────────────
+    // These verify the action is recognized (dispatched to plugin_bridge)
+    // even though the actual plugin call will fail without a running server.
+
+    #[test]
+    fn build_fix_context_action_recognized() {
+        // Without pr_number in payload -> invalid_input, NOT not_found
+        let input = test_input("build-fix-context");
+        let err = execute_action(&input).unwrap_err();
+        assert_eq!(
+            err.code, "invalid_input",
+            "build-fix-context should be recognized and require pr_number"
         );
     }
 }

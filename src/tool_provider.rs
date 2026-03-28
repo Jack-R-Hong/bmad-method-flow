@@ -156,9 +156,9 @@ impl ToolProvider for BmadToolProvider {
     }
 
     async fn execute_tool(&self, call: ToolCall) -> Result<ToolResult, ToolError> {
-        // Auto-dev tool
+        // Auto-dev tool — delegates to plugin-auto-loop via plugin_bridge
         if call.name == TOOL_AUTO_DEV_NEXT {
-            let result = crate::auto_dev::auto_dev_next(&self.config)
+            let result = crate::plugin_bridge::auto_loop_next(&self.config)
                 .map_err(|e| ToolError::execution_error(e.to_string()))?;
             let json = match result {
                 Some(r) => serde_json::to_string_pretty(&r).unwrap_or_default(),
@@ -367,17 +367,6 @@ mod tests {
             result.unwrap_err(),
             ToolError::InvalidArguments(_)
         ));
-    }
-
-    // ── Board tool dispatch tests ────────────────────────────────────
-
-    fn temp_provider() -> (tempfile::TempDir, BmadToolProvider) {
-        let dir = tempfile::tempdir().unwrap();
-        let config = WorkspaceConfig {
-            base_dir: dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        (dir, BmadToolProvider::new(config))
     }
 
     // Board tool tests moved to plugin-board.
