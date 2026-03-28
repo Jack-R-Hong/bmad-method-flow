@@ -1,6 +1,9 @@
 db_path: "pulse.db"
 log_level: "info"
 plugin_dir: "config/plugins"
+workflows_path: "workflows"
+agents_path: "agents"
+policies_path: "policies"
 
 # ── Memory / Knowledge Graph ────────────────────────────────
 # provider: gitnexus | greptile | none

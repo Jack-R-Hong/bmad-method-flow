@@ -1,0 +1,7 @@
+db_path: "pulse.db"
+log_level: "info"
+plugin_dir: "plugins"
+plugin_formats: ["native"]
+workflows_path: "workflows"
+agents_path: "agents"
+policies_path: "policies"
