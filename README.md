@@ -10,6 +10,32 @@ Pulse coding plugin pack — AI 驅動的軟體開發工作流系統。
 - [Pulse](https://github.com/pulsate-labs/pulse) CLI 已安裝
 - Anthropic API key（供 Claude Code 使用）
 
+## Plugin 依賴
+
+### Pack plugins（需建置安裝）
+
+| Plugin | Repo |
+|--------|------|
+| `bmad-method` | Jack-R-Hong/bmad-method |
+| `provider-claude-code` | Jack-R-Hong/provider-claude-code |
+| `plugin-git-ops` | Jack-R-Hong/pulse-plugins-git-ops |
+| `plugin-git-worktree` | Jack-R-Hong/plugin-git-worktree |
+| `plugin-memory` | _(此 repo 內的 script)_ |
+
+### Bridge plugins（runtime 委派，選用）
+
+| Plugin | Repo |
+|--------|------|
+| `plugin-board` | Jack-R-Hong/plugin-board |
+| `plugin-auto-loop` | Jack-R-Hong/plugin-auto-loop |
+| `plugin-issue-sync` | Jack-R-Hong/plugin-issue-sync |
+| `plugin-test-runner` | Jack-R-Hong/plugin-test-runner |
+| `plugin-feedback-loop` | Jack-R-Hong/plugin-feedback-loop |
+| `plugin-trigger-cron` | Jack-R-Hong/plugin-trigger-cron |
+| `plugin-workspace-tracker` | Jack-R-Hong/plugin-workspace-tracker |
+
+詳細說明見 [docs/architecture.md#plugin-dependencies](docs/architecture.md)。
+
 ## 安裝
 
 ### 1. 建置所有 plugin

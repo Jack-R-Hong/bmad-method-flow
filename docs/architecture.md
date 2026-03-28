@@ -205,13 +205,31 @@ Conditional compilation with `cfg(not(target_arch = "wasm32"))`:
 
 ## Plugin Dependencies
 
-| Plugin | Required | Purpose |
-|--------|----------|---------|
-| bmad-method | Yes | BMAD methodology engine |
-| provider-claude-code | Yes | Claude Code LLM provider |
-| plugin-git-worktree | No | Git worktree management |
-| plugin-memory | No | Knowledge graph / memory |
-| plugin-board | No | Scrum board management |
+### Pack plugins (`plugin-packs/coding.toml`)
+
+Built from source and loaded into `config/plugins/` at install time:
+
+| Plugin | Required | Repo | Purpose |
+|--------|----------|------|---------|
+| `bmad-method` | Yes | Jack-R-Hong/bmad-method | BMAD methodology engine (12 AI agents) |
+| `provider-claude-code` | Yes | Jack-R-Hong/provider-claude-code | Claude Code LLM provider |
+| `plugin-git-ops` | Yes | Jack-R-Hong/pulse-plugins-git-ops | Git commit, push, branch operations |
+| `plugin-git-worktree` | No | Jack-R-Hong/plugin-git-worktree | Git worktree management |
+| `plugin-memory` | No | _(script in this repo)_ | Knowledge graph / memory |
+
+### Bridge plugins (`src/plugin_bridge.rs`)
+
+Called at runtime via HTTP; must be running as separate Pulse plugins:
+
+| Plugin | Required | Repo | Purpose |
+|--------|----------|------|---------|
+| `plugin-board` | No | Jack-R-Hong/plugin-board | Scrum board management |
+| `plugin-auto-loop` | No | Jack-R-Hong/plugin-auto-loop | Task pickup, workflow dispatch, validation |
+| `plugin-issue-sync` | No | Jack-R-Hong/plugin-issue-sync | GitHub issue synchronization |
+| `plugin-test-runner` | No | Jack-R-Hong/plugin-test-runner | Test execution and result parsing |
+| `plugin-feedback-loop` | No | Jack-R-Hong/plugin-feedback-loop | PR review feedback processing |
+| `plugin-trigger-cron` | No | Jack-R-Hong/plugin-trigger-cron | Scheduled triggering |
+| `plugin-workspace-tracker` | No | Jack-R-Hong/plugin-workspace-tracker | Worktree lifecycle management |
 
 ## Testing Strategy
 
