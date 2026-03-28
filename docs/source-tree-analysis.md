@@ -1,153 +1,141 @@
 # Source Tree Analysis — plugin-coding-pack
 
-> Generated: 2026-03-27 | Scan Level: quick | Mode: full_rescan
+> Generated: 2026-03-28 | Scan Level: exhaustive | Mode: full_rescan
 
 ## Directory Structure
 
 ```
-bmad-method-flow/                    # Project root
-├── src/                             # Rust source — core plugin logic (13 modules)
-│   ├── lib.rs                       #   Library entry point (cdylib + rlib) — plugin trait impl
-│   ├── main.rs                      #   Binary entry point — CLI for standalone execution
-│   ├── pack.rs                      #   Pack orchestration — plugin coordination & management
-│   ├── validator.rs                 #   Pack validation — checks plugin readiness
-│   ├── executor.rs                  #   Workflow execution engine — DAG-based step dispatch
-│   ├── board.rs                     #   Scrum/Kanban board actions — epic/story/task operations
-│   ├── board_store.rs               #   Board data persistence — JSON-based CRUD store
-│   ├── tool_provider.rs             #   Tool provisioning — MCP-style tool interface
-│   ├── config_injector.rs           #   Config injection — provider config template rendering
-│   ├── workspace.rs                 #   Workspace detection — project root and config discovery
-│   ├── agent_registry.rs            #   Agent discovery — workspace-based agent definitions
-│   ├── test_parser.rs               #   Test result parsing — structured test output extraction
-│   └── util.rs                      #   Shared utilities
+plugin-coding-pack/
+├── src/                          # Rust source (5,137 LOC across 11 modules)
+│   ├── lib.rs                    # ★ Crate root — plugin metadata, register(), CodingPackPlugin struct
+│   ├── main.rs                   # ★ Binary entry — JSON-RPC stdio adapter, 16-method dispatch
+│   ├── pack.rs                   # ★ Core — 18 action dispatcher, data-query/mutate routing, agents.yaml generation
+│   ├── workspace.rs              # Workspace config resolution (WorkspaceConfig, WorkflowFilter, AutoDevConfig, AgentMeshSettings)
+│   ├── validator.rs              # Workflow YAML & agents.yaml structural validation with DAG cycle detection
+│   ├── plugin_bridge.rs          # HTTP/RPC bridge to 5 platform plugins (auto-loop, issue-sync, feedback-loop, workspace-tracker)
+│   ├── config_injector.rs        # BmadAgentInjector — CSV manifest → per-agent system prompt injection
+│   ├── tool_provider.rs          # BmadToolProvider — 6 LLM-callable tools wrapping pack actions
+│   ├── agent_registry.rs         # BmadAgentRegistry — agent discovery, skill routing, ACL rules
+│   ├── pulse_api.rs              # Minimal Pulse task API client (get_task only)
+│   └── util.rs                   # Utility: is_executable() permission check
 │
-├── config/                          # Pulse runtime configuration
-│   ├── config.yaml                  #   Main config (db_path, log_level, memory provider)
-│   ├── plugins/                     #   Plugin binaries directory (deploy target)
-│   │   ├── plugin-coding-pack       #     This plugin (built binary)
-│   │   ├── provider-claude-code     #     Claude Code LLM provider
-│   │   ├── bmad-method              #     BMAD methodology plugin
-│   │   ├── plugin-git-ops           #     Git operations plugin
-│   │   ├── plugin-git-worktree      #     Git worktree management
-│   │   ├── plugin-git-pr            #     Git PR creation (shell script)
-│   │   └── plugin-memory            #     Memory/knowledge graph (shell script)
-│   ├── workflows/                   #   Workflow YAML definitions (source of truth)
-│   │   ├── coding-quick-dev.yaml    #     Quick development (3 steps)
-│   │   ├── coding-feature-dev.yaml  #     Full feature development (5 steps)
-│   │   ├── coding-story-dev.yaml    #     Story-driven development (6 steps)
-│   │   ├── coding-bug-fix.yaml      #     Bug fix workflow (4 steps)
-│   │   ├── coding-refactor.yaml     #     Refactoring workflow (4 steps)
-│   │   ├── coding-review.yaml       #     Code review workflow (3 steps)
-│   │   ├── coding-parallel-review.yaml  # Parallel code review (multi-reviewer)
-│   │   ├── coding-memory-index.yaml #     Memory re-indexing workflow
-│   │   ├── bootstrap-plugin.yaml    #     Self-development: single plugin (5 steps)
-│   │   ├── bootstrap-rebuild.yaml   #     Self-development: rebuild all (3 steps)
-│   │   └── bootstrap-cycle.yaml     #     Self-development: full cycle (8 steps)
-│   ├── provider-configs/            #   LLM provider configuration templates
-│   │   ├── _default/                #     Default templates (AGENT.md, RULE.md, SKILL.md)
-│   │   └── claude-code/             #     Claude Code-specific overrides
-│   └── config/workflows/...         #   Deployed workflow copies (install.sh output)
+├── config/                       # Runtime configuration
+│   ├── config.yaml               # Main config: db_path, log_level, plugin_dir, memory settings
+│   ├── auto-loop.yaml            # Auto-dev routing: label → workflow mapping, retries, poll interval
+│   ├── plugins/                  # Plugin binary directory (installed by install.sh)
+│   │   ├── bmad-method            # Required sibling plugin
+│   │   ├── provider-claude-code   # Required sibling plugin
+│   │   ├── plugin-git-ops         # Optional git operations
+│   │   ├── plugin-git-worktree    # Optional worktree management
+│   │   ├── plugin-memory          # Optional memory/knowledge graph
+│   │   └── plugin-coding-pack     # This plugin's own binary
+│   ├── workflows/                # YAML workflow definitions (12 workflows)
+│   │   ├── coding-feature-dev.yaml
+│   │   ├── coding-quick-dev.yaml
+│   │   ├── coding-bug-fix.yaml
+│   │   ├── coding-story-dev.yaml
+│   │   ├── coding-refactor.yaml
+│   │   ├── coding-review.yaml
+│   │   ├── coding-parallel-review.yaml
+│   │   ├── coding-memory-index.yaml
+│   │   ├── coding-pr-fix.yaml
+│   │   ├── bootstrap-plugin.yaml
+│   │   ├── bootstrap-rebuild.yaml
+│   │   └── bootstrap-cycle.yaml
+│   └── provider-configs/         # Provider-specific config overrides
+│       ├── _default/             # Default agent/rule/skill markdown templates
+│       └── claude-code/          # Claude Code provider overrides
 │
-├── dashboard/                       # Pulse dashboard extension (JSON manifest-driven)
-│   ├── manifest.json                #   Dashboard page definitions (11 pages)
-│   ├── display-customizations.json  #   UI display overrides
-│   ├── mock-responses/              #   Mock API responses for dashboard testing
-│   │   ├── status.json              #     Pack health status
-│   │   ├── workflows-list.json      #     Workflow listing
-│   │   ├── workflow-detail.json     #     Single workflow details
-│   │   ├── agents-list.json         #     AI agent roster
-│   │   ├── board-data.json          #     Task board Kanban data
-│   │   └── board-filters.json       #     Board filter definitions
-│   └── tests/                       #   Dashboard extension tests (TypeScript)
-│       ├── coding-pack.test.ts      #     Pack overview page tests
-│       ├── execute-workflow.test.ts  #     Workflow execution tests
-│       ├── scrum-board.test.ts      #     Scrum board basic tests
-│       ├── scrum-board-detail.test.ts   # Card detail popup tests
-│       ├── scrum-board-filters.test.ts  # Board filtering tests
-│       ├── atdd-scrum-board.test.ts #     Acceptance-driven board tests
-│       ├── board-tools-e2e.test.ts  #     Board tools end-to-end tests
-│       └── helpers.ts               #     Test helper utilities
+├── dashboard/                    # Dashboard test harness (Playwright)
+│   ├── package.json              # Playwright ^1.52.0
+│   ├── playwright.config.ts
+│   ├── tsconfig.json
+│   ├── display-customizations.json
+│   ├── mock-responses/           # Mock JSON for dashboard endpoint testing
+│   │   ├── status.json
+│   │   ├── workflows-list.json
+│   │   ├── workflow-detail.json
+│   │   ├── agents-list.json
+│   │   ├── board-data.json
+│   │   └── board-filters.json
+│   └── tests/                    # 7 Playwright test files
+│       ├── helpers.ts
+│       ├── coding-pack.test.ts
+│       ├── execute-workflow.test.ts
+│       ├── scrum-board.test.ts
+│       ├── scrum-board-filters.test.ts
+│       ├── scrum-board-detail.test.ts
+│       └── atdd-scrum-board.test.ts
 │
-├── tests/                           # Rust integration & E2E tests
-│   ├── registration_tests.rs        #   Plugin registration and action dispatch tests
-│   ├── e2e_tests.rs                 #   End-to-end plugin integration tests
-│   ├── e2e_executor_tests.rs        #   Workflow executor E2E tests (23+ tests)
-│   ├── e2e/                         #   E2E test module
-│   │   └── mod.rs                   #     E2E test harness
-│   └── fixtures/                    #   Test fixtures
-│       ├── mock-plugins/            #     Mock plugin executables (bmad-method, etc.)
-│       ├── sample-project/          #     Sample Rust project for testing
-│       └── workflows/               #     Test workflow YAML definitions (15 files)
+├── tests/                        # Rust integration tests (1,019 LOC)
+│   ├── registration_tests.rs     # SDK PluginRegistry integration: register(), injection pipeline, tool dispatch
+│   ├── e2e_tests.rs              # End-to-end workflow execution tests
+│   ├── e2e_executor_tests.rs     # Executor-specific e2e tests
+│   ├── e2e/
+│   │   └── mod.rs                # E2E test utilities
+│   └── fixtures/                 # Test data
+│       ├── sample-project/       # Minimal Cargo.toml + lib.rs for testing
+│       ├── mock-plugins/         # Stub plugin binaries
+│       └── workflows/            # 15 test workflow YAMLs (happy/failure paths)
 │
-├── plugin-packs/                    # Plugin pack definitions
-│   └── coding.toml                  #   Coding pack manifest (7 plugins, 11 workflows)
+├── _bmad/                        # BMAD methodology data
+│   └── _config/
+│       └── agent-manifest.csv    # ★ Agent persona data for 9 BMAD agents
 │
-├── docs/                            # Project documentation (project_knowledge)
-│   ├── index.md                     #   Master documentation index
-│   ├── project-overview.md          #   Executive summary
-│   ├── architecture.md              #   Architecture documentation
-│   ├── source-tree-analysis.md      #   (this file)
-│   ├── development-guide.md         #   Development guide
-│   ├── plugin-coding-pack.md        #   Detailed technical reference
-│   └── project-scan-report.json     #   Scan workflow state
+├── _bmad-output/                 # BMAD planning & implementation artifacts
+│   ├── planning-artifacts/       # PRDs, architecture docs, epic breakdowns
+│   └── implementation-artifacts/ # 70+ story implementation specs
 │
-├── _bmad/                           # BMAD methodology framework (installed module)
-│   ├── bmm/                         #   Core BMAD agents, workflows, teams
-│   │   └── config.yaml              #   BMM module config (user prefs, output paths)
-│   ├── core/                        #   Shared skills and tasks
-│   └── tea/                         #   Test architecture module
+├── docs/                         # Generated project documentation (this folder)
+├── plugin-packs/                 # Pack distribution bundles
 │
-├── _bmad-output/                    # BMAD workflow output artifacts
-│   ├── planning-artifacts/          #   PRD, architecture, UX design outputs
-│   │   └── prd.md                   #   Product Requirements Document
-│   └── implementation-artifacts/    #   21 implementation story files
-│
-├── .claude/                         # Claude Code configuration and skills
-│
-├── Cargo.toml                       # Rust package manifest
-├── Cargo.lock                       # Dependency lock file
-├── README.md                        # Project README (Chinese/English)
-├── install.sh                       # Plugin installation script
-├── uninstall.sh                     # Plugin uninstallation script
-└── pulse.db                         # SQLite runtime database
+├── Cargo.toml                    # ★ Package manifest: plugin-coding-pack v0.1.0
+├── Cargo.lock                    # Dependency lock file
+├── README.md                     # Project readme (Chinese/English)
+├── install.sh                    # Build + install script for all sibling plugins
+├── uninstall.sh                  # Cleanup script
+├── pulse.db                      # SQLite database (runtime data)
+└── .gitignore
 ```
 
 ## Critical Folders
 
 | Folder | Purpose | Key Files |
 |--------|---------|-----------|
-| `src/` | Core Rust plugin — all business logic (13 modules, ~315K source) | `lib.rs` (entry), `executor.rs` (workflow engine), `board.rs` + `board_store.rs` (scrum board), `tool_provider.rs` (MCP tools), `pack.rs` (orchestration) |
-| `config/workflows/` | Pulse workflow definitions — defines the step pipelines for all 11 workflows | 11 YAML files covering coding, review, and bootstrap workflows |
-| `dashboard/` | Dashboard UI extension — 11 SDK-rendered pages defined via JSON manifest | `manifest.json`, 6 mock responses, 8 test files |
-| `tests/` | Integration and E2E test suite | 3 Rust test files, 15 workflow fixtures, mock plugins |
-| `config/provider-configs/` | LLM provider configuration templates | Default templates for AGENT.md, RULE.md, SKILL.md |
+| `src/` | All Rust source code | `lib.rs` (entry), `pack.rs` (actions), `main.rs` (binary) |
+| `config/plugins/` | Installed plugin binaries | `bmad-method`, `provider-claude-code` (required) |
+| `config/workflows/` | YAML workflow definitions | 12 workflow files controlling dev pipelines |
+| `_bmad/_config/` | Agent persona manifest | `agent-manifest.csv` — source of truth for 9 BMAD agents |
+| `tests/` | Rust integration tests | `registration_tests.rs` (SDK integration) |
+| `dashboard/tests/` | Playwright E2E tests | 7 test files covering dashboard endpoints |
 
 ## Entry Points
 
-| Entry Point | Type | Purpose |
+| Entry Point | File | Purpose |
 |-------------|------|---------|
-| `src/lib.rs` | Library (cdylib + rlib) | Plugin interface — exposes all actions (pack management, workflow execution, board operations, tool provisioning) |
-| `src/main.rs` | Binary | Standalone execution — CLI for direct workflow and board operations |
-| `install.sh` | Script | Builds and installs all plugin binaries + dashboard extension |
-| `uninstall.sh` | Script | Removes installed plugin binaries and dashboard artifacts |
+| Library crate | `src/lib.rs` | `register()` for server mode, `CodingPackPlugin` for WIT traits |
+| Binary | `src/main.rs` | JSON-RPC stdio adapter with `dispatch_combined()` |
+| Install | `install.sh` | Build and deploy all sibling plugins |
+| Tests (Rust) | `cargo test` | Unit tests + integration tests |
+| Tests (E2E) | `cd dashboard && npx playwright test` | Dashboard endpoint tests |
 
-## Key Configuration Files
+## Module Dependency Graph
 
-| File | Format | Purpose |
-|------|--------|---------|
-| `Cargo.toml` | TOML | Rust package manifest, dependencies, build targets |
-| `config/config.yaml` | YAML | Runtime config (DB, logging, plugin dir, memory provider) |
-| `plugin-packs/coding.toml` | TOML | Pack manifest (7 plugins, 11 workflows, dashboard, prerequisites) |
-| `dashboard/manifest.json` | JSON | Dashboard page definitions (11 pages) and layouts |
-| `config/provider-configs/_default/*.md` | Markdown | Default provider config templates (AGENT, RULE, SKILL) |
+```
+lib.rs
+├── pack (action dispatcher)
+│   ├── validator (workflow/agents YAML validation)
+│   ├── workspace (WorkspaceConfig resolution)
+│   ├── plugin_bridge (platform plugin delegation)
+│   ├── pulse_api (task API client)
+│   └── util (is_executable)
+├── config_injector (BmadAgentInjector — CSV → system prompts)
+├── tool_provider (BmadToolProvider — pack actions as LLM tools)
+│   └── pack (action execution)
+└── agent_registry (BmadAgentRegistry — agent discovery + ACL)
+    └── config_injector (CSV parsing utilities)
 
-## Notable Patterns
-
-- **No custom frontend code**: Dashboard is entirely JSON-manifest-driven, rendered by Pulse SDK
-- **WASM target support**: `wit-bindgen` dependency for `wasm32` target — plugin can run as WASM component
-- **Self-bootstrapping**: Bootstrap workflows allow the plugin to develop and rebuild itself
-- **Board system**: Full Scrum/Kanban board with JSON-based persistence (board_store.rs) for tracking epics, stories, and tasks
-- **Tool provisioning**: MCP-style tool provider (tool_provider.rs) for exposing plugin capabilities to LLMs
-- **Config injection**: Dynamic config injection (config_injector.rs) into provider configurations via templates
-- **Agent discovery**: Workspace-based agent definition discovery (agent_registry.rs) from BMAD skill definitions
-- **Nested workflow copies**: `config/config/workflows/config/workflows/` contains deployed workflow copies from install.sh
+main.rs
+├── lib (CodingPackPlugin, BmadAgentInjector, BmadToolProvider, BmadAgentRegistry)
+└── pulse_plugin_sdk::dev_adapter (JSON-RPC stdio loop)
+```

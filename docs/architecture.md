@@ -1,240 +1,243 @@
 # plugin-coding-pack — Architecture
 
-> Generated: 2026-03-27 | Scan Level: quick | Mode: full_rescan
+> Generated: 2026-03-28 | Scan Level: exhaustive | Mode: full_rescan
 
 ## Overview
 
-`plugin-coding-pack` is a Pulse platform meta-plugin built in Rust. It acts as an orchestration layer that validates, loads, and coordinates multiple sibling plugins to deliver AI-driven development workflows, a Scrum board for project tracking, and MCP-style tool provisioning for LLM integration.
+plugin-coding-pack is a Pulse meta-plugin that orchestrates an AI-driven software development workflow. It coordinates sibling plugins (bmad-method, provider-claude-code, git-worktree, and others) and exposes BMAD methodology agents as first-class entities within the Pulse ecosystem.
 
-```
-+------------------------------------------------------------+
-|                   plugin-coding-pack                        |
-|                     (orchestrator)                          |
-|                                                             |
-|  ┌─────────────┐  ┌────────────────────┐                   |
-|  │ bmad-method  │  │ provider-claude-   │                   |
-|  │  (required)  │  │   code (required)  │                   |
-|  │ 10 AI agents │  │ Claude Code CLI    │                   |
-|  └─────────────┘  └────────────────────┘                   |
-|  ┌─────────────┐  ┌────────────────────┐                   |
-|  │  git-ops    │  │  git-worktree      │                   |
-|  │  (optional) │  │  (optional)        │                   |
-|  └─────────────┘  └────────────────────┘                   |
-|  ┌─────────────┐  ┌────────────────────┐                   |
-|  │  git-pr     │  │  plugin-memory     │                   |
-|  │  (optional) │  │  GitNexus (opt)    │                   |
-|  └─────────────┘  └────────────────────┘                   |
-+------------------------------------------------------------+
-```
+The plugin operates in two modes:
+- **Server mode**: Registers capabilities (ConfigInjector, ToolProvider, AgentDefinitionProvider) with Pulse's PluginRegistry via `register()`
+- **CLI/stdio mode**: Runs as a binary with a JSON-RPC stdio adapter dispatching 16 methods via `dispatch_combined()`
 
 ## Architecture Pattern
 
-**Plugin-based orchestrator with WASM component model**
+**Plugin architecture with capability-based registration and delegation to platform plugins.**
 
-The crate produces two artifacts:
-1. **Binary** (`src/main.rs`) — CLI entry point for direct execution
-2. **Library** (`src/lib.rs`, cdylib + rlib) — WASM-compatible plugin for the Pulse runtime
+The crate produces three artifacts:
+- `cdylib` — Dynamic library for Pulse server plugin loading
+- `rlib` — Rust library for direct linking
+- `bin` — Standalone binary for JSON-RPC stdio communication
 
-The plugin system uses Rust traits from `pulse-plugin-sdk` to define a standard interface:
+## Technology Stack
 
-### Trait Implementations
+| Category | Technology | Version | Purpose |
+|----------|-----------|---------|---------|
+| Language | Rust | Edition 2021, MSRV 1.85 | Systems-level plugin development |
+| Plugin SDK | pulse-plugin-sdk | local | Core plugin framework (traits, types, registry) |
+| Serialization | serde + serde_json + serde_yaml | 1.0 / 0.9 | Config parsing, JSON-RPC, YAML workflows |
+| Async Runtime | tokio | 1.40 | Async I/O for native targets |
+| HTTP Client | reqwest | 0.12 (blocking) | Fallback HTTP communication with Pulse API |
+| WASM Bindings | wit-bindgen | 0.53 | WebAssembly component model (wasm32 target) |
+| Logging | tracing | 0.1 | Structured logging |
+| Database | SQLite (pulse.db) | — | Persistent task and board storage |
+| Testing | Playwright | ^1.52.0 | Dashboard E2E tests |
+| Methodology | BMAD | v6.2.0 | Dev workflow framework with 9 agent personas |
 
-| Trait | Purpose | Key Methods |
-|-------|---------|-------------|
-| `PluginLifecycle` | Identity and health | `get_info()`, `health_check()` |
-| `StepExecutorPlugin` | Action dispatch | `execute(task, config)` |
-| `DashboardExtensionPlugin` | UI integration | `get_pages_json()`, `get_api_routes_json()`, `get_display_customizations_json()` |
-| `AgentDefinitionProvider` | Agent discovery | `list_agent_definitions()`, `get_agent_definition(id)` |
+## Core Components
 
-## Source Modules
+### 1. CodingPackPlugin (lib.rs)
 
-| File | Size | Purpose |
-|------|------|---------|
-| `src/lib.rs` | 20K | Plugin struct, trait impls, dashboard JSON, action routing |
-| `src/main.rs` | 8K | Binary entry point, CLI argument handling |
-| `src/executor.rs` | 78K | Workflow execution engine — DAG dispatch, retry loops, parallel steps, quality gates |
-| `src/board.rs` | 41K | Scrum/Kanban board actions — epic/story/task CRUD, status transitions |
-| `src/board_store.rs` | 45K | Board data persistence — JSON file-based store with CRUD operations |
-| `src/tool_provider.rs` | 24K | MCP-style tool provisioning — tool definitions, parameter schemas, invocations |
-| `src/test_parser.rs` | 25K | Test result parsing — structured output extraction from test runners |
-| `src/pack.rs` | 22K | Pack orchestration — plugin validation, workflow listing, action dispatch |
-| `src/config_injector.rs` | 14K | Config injection — provider config template rendering into workspace |
-| `src/validator.rs` | 14K | Pack validation — workflow YAML parsing, plugin binary checks |
-| `src/workspace.rs` | 12K | Workspace detection — project root discovery, config file resolution |
-| `src/agent_registry.rs` | 11K | Agent discovery — scans workspace for BMAD agent/skill definitions |
-| `src/util.rs` | <1K | Utility functions (is_executable, etc.) |
+The main plugin struct implementing three Pulse SDK traits:
+- **PluginLifecycle** — `get_info()` (metadata + 5 dependencies), `health_check()` (verifies plugin binaries exist and are executable)
+- **StepExecutorPlugin** — `execute()` dispatches to `pack::execute_action()`, handles `__probe__` capability probes
+- **DashboardExtensionPlugin** — `get_pages_json()` (7 pages), `get_api_routes_json()` (21+ endpoints), `get_display_customizations_json()` (4 customizations)
 
-## Action Dispatch
+### 2. Pack Action Dispatcher (pack.rs — 1,248 LOC)
 
-The `StepExecutorPlugin::execute` method routes JSON input to action handlers organized by domain:
+Central routing for 18 actions across 4 categories:
 
-### Pack Management Actions
-| Action | Handler | Description |
-|--------|---------|-------------|
-| `validate-pack` | `pack.rs` | Validate all plugin binaries and workflows |
-| `validate-workflows` | `pack.rs` | Validate workflow YAML files |
-| `list-workflows` | `pack.rs` | List registered workflows |
-| `list-plugins` | `pack.rs` | List installed plugins |
-| `status` | `pack.rs` | Pack health and validation summary |
-| `__probe__` | `lib.rs` | Capability probe (returns `probe_ok`) |
+**Local operations:**
+- `validate-pack` — Check required/optional plugin binaries and workflow files
+- `validate-workflows` — Run structural validation on all YAML workflows
+- `list-workflows` — List available workflows respecting filter rules
+- `list-plugins` — Inventory installed plugins with size and executable status
+- `status` — Combined pack validation + workflow list + plugin list
+- `data-query` — Dashboard proxy: routes endpoint paths to internal data functions (status, health, workflows/list, agents/list, board/summary, tasks/*/workflow-context, tasks/*/agent-info, workflows/*)
+- `data-mutate` — Dashboard proxy for mutations (board mutations moved to plugin-board)
+- `generate-agents-yaml` — Generate agents.yaml ACL config from registry
 
-### Workflow Execution Actions
-| Action | Handler | Description |
-|--------|---------|-------------|
-| `execute-workflow` | `executor.rs` | Execute a complete workflow pipeline |
-| `execute-step` | `executor.rs` | Execute a single workflow step |
-| `get-workflow-context` | `executor.rs` | Retrieve workflow execution context |
+**Delegated to plugin-auto-loop:**
+- `execute-workflow` — Trigger workflow execution via Pulse engine
+- `auto-dev-status` — Current auto-dev loop / board status
+- `auto-dev-next` — Pick next ready-for-dev task and run its workflow
+- `auto-dev-watch` — Process multiple tasks in watch mode
 
-### Board Actions
-| Action | Handler | Description |
-|--------|---------|-------------|
-| `board-data` | `board.rs` | Get Kanban board data (assignments by status) |
-| `board-filters` | `board.rs` | Get available board filter definitions |
-| `board-assignments/{id}` | `board.rs` | Get assignment detail with tasks/comments |
-| `board-epics-list` | `board.rs` | List all epics with progress |
-| `board-epics/{id}` | `board.rs` | Get epic detail with stories |
-| `board-create-epic` | `board.rs` | Create a new epic |
-| `board-update-epic` | `board.rs` | Update epic fields |
-| `board-create-story` | `board.rs` | Create a story under an epic |
-| `board-update-story` | `board.rs` | Update story fields/status |
+**Delegated to other platform plugins:**
+- `sync-github-issues` — via plugin-issue-sync
+- `cleanup-worktrees`, `worktree-status`, `recover-worktrees` — via plugin-workspace-tracker
+- `check-pr-reviews`, `build-fix-context` — via plugin-feedback-loop
 
-### Tool Provider Actions
-| Action | Handler | Description |
-|--------|---------|-------------|
-| `list-tools` | `tool_provider.rs` | List available MCP-style tools |
-| `invoke-tool` | `tool_provider.rs` | Invoke a tool with parameters |
-| `get-tool-schema` | `tool_provider.rs` | Get tool parameter schema |
+### 3. Plugin Bridge (plugin_bridge.rs)
 
-### Configuration Actions
-| Action | Handler | Description |
-|--------|---------|-------------|
-| `inject-config` | `config_injector.rs` | Inject config into provider templates |
-| `detect-workspace` | `workspace.rs` | Detect workspace root and configuration |
-| `list-agents` | `agent_registry.rs` | List discovered agent definitions |
-| `get-agent` | `agent_registry.rs` | Get specific agent definition |
+Thin HTTP/RPC bridge replacing direct module calls with delegation to platform plugins:
+- **Server mode**: Tries `call_capability()` first via SDK host functions
+- **CLI mode**: Falls back to HTTP POST to Pulse API (`http://127.0.0.1:{PULSE_API_PORT}/api/v1/...`)
+- **WASM mode**: Returns error (bridge not available)
+
+Delegates to 5 platform plugins:
+- `plugin-auto-loop` — Task pickup, workflow dispatch, validation
+- `plugin-issue-sync` — GitHub issue synchronization
+- `plugin-feedback-loop` — PR review feedback processing
+- `plugin-workspace-tracker` — Worktree lifecycle management
+- `plugin-trigger-cron` — Scheduled triggering
+
+### 4. BmadAgentInjector (config_injector.rs)
+
+ConfigInjector that loads agent personas from `_bmad/_config/agent-manifest.csv`:
+- Parses CSV with custom multi-line quote handling (`split_csv_rows`, `parse_csv_row`)
+- Caches 9 agent personas in memory (HashMap keyed by `bmad/{name}`)
+- `applies_to()` matches only `bmad/` prefixed agent names present in manifest
+- `provide_injections()` returns 2 injections per agent:
+  1. System prompt (identity + communication style + role) at priority 100, prepended
+  2. Principles at priority 110, appended
+
+### 5. BmadToolProvider (tool_provider.rs)
+
+ToolProvider exposing 6 LLM-callable tools:
+- `bmad_validate_pack` (Low sensitivity)
+- `bmad_list_workflows` (Low)
+- `bmad_list_plugins` (Low)
+- `bmad_data_query` (Low) — requires `endpoint` parameter
+- `bmad_data_mutate` (Medium) — requires `endpoint`, optional `payload`
+- `bmad_auto_dev_next` (High) — delegates to plugin-auto-loop
+
+### 6. BmadAgentRegistry (agent_registry.rs)
+
+AgentDefinitionProvider for workspace-based discovery:
+- Loads same CSV manifest as BmadAgentInjector
+- Maps agents to `SdkAgentDefinition` with skills from CSV `capabilities` column
+- Sorted alphabetically for deterministic ordering
+- ACL rules (static, architecture-defined):
+  - `bmad/architect` can invoke: analyst, developer, ux-designer
+  - `bmad/qa` can invoke: developer only
+  - `bmad/quick-flow-solo-dev` can invoke: none (solo agent)
+  - All others default to: can invoke developer
+  - All agents can respond to: pm, sm
+
+### 7. Workspace Configuration (workspace.rs)
+
+Resolution priority: explicit `workspace_dir` > `PULSE_WORKSPACE_DIR` env > inferred from binary path > "."
+
+Key settings:
+- `WorkflowFilter` — enabled/disabled workflow lists (disabled takes priority)
+- `DefaultSettings` — default_model, max_budget_usd, memory provider
+- `AutoDevConfig` — max_retries (1), max_tasks (10), skip_validation
+- `GitHubSyncConfig` — filter_labels, filter_milestone, review_poll_interval_secs (60)
+- `AgentMeshSettings` — enabled, max_depth (5), agents_yaml_path
+
+### 8. Validator (validator.rs)
+
+Structural validation for two YAML formats:
+
+**Workflow validation:**
+- Required fields: name, version, non-empty steps array
+- Per-step: id required, agent steps need system_prompt, executor binary must exist
+- Session steps: minimum 2 participants with bmad/ prefix, valid convergence strategy (fixed_turns/unanimous/stagnation)
+- DAG validation: depends_on references must exist, cycle detection via DFS
+- context_from references validated against step IDs
+- Plugin dependency verification (requires block)
+
+**Agents.yaml validation:**
+- Each agent must have: description, can_invoke, can_respond_to
+- Reference validation: can_invoke/can_respond_to names must exist as top-level keys
+
+### 9. JSON-RPC Dispatch (main.rs)
+
+Stdio-based JSON-RPC adapter handling 16 methods:
+
+| Method | Component |
+|--------|-----------|
+| `plugin-lifecycle.get-info` | CodingPackPlugin |
+| `plugin-lifecycle.health-check` | CodingPackPlugin |
+| `step-executor.execute` | CodingPackPlugin |
+| `dashboard-extension.get-pages-json` | CodingPackPlugin |
+| `dashboard-extension.get-api-routes-json` | CodingPackPlugin |
+| `dashboard-extension.get-display-customizations-json` | CodingPackPlugin |
+| `config-injector.injector-name` | BmadAgentInjector |
+| `config-injector.priority` | BmadAgentInjector |
+| `config-injector.applies-to` | BmadAgentInjector |
+| `config-injector.provide-injections` | BmadAgentInjector |
+| `tool-provider.provider-name` | BmadToolProvider |
+| `tool-provider.available-tools` | BmadToolProvider |
+| `tool-provider.execute-tool` | BmadToolProvider |
+| `agent-definition.provider-name` | BmadAgentRegistry |
+| `agent-definition.list-agents` | BmadAgentRegistry |
+| `agent-definition.get-agent` | BmadAgentRegistry |
 
 ## Dashboard Extension
 
-The plugin exposes an 11-page dashboard via the Pulse SDK manifest system:
+### Pages (7)
 
-| Page | Layout Type | Purpose |
-|------|-------------|---------|
-| Overview | detail | Pack health, workflow count, plugin list |
-| Task Board | board (Kanban) | Assignments by status with epic swimlanes |
-| Epics | table | All epics with stories and progress bars |
-| Workflows | table | Browse all workflows with execute/view actions |
-| AI Agents | table | BMAD agent roster and roles |
-| Pack Status | detail | Validation results, plugin health |
-| Execute | form | Trigger workflow execution with parameters |
-| Logs | stream | Real-time SSE execution events |
-| Workflow Detail | detail | Step pipeline, parallel groups, execution history |
-| Assignment Detail | detail | Task checklist, comments thread |
-| Epic Detail | detail | Stories breakdown, completion progress |
+overview, workflows, workflow-detail, agents, status, execute, logs
 
-### API Routes
+Page layouts include: table, detail, form, stream
 
-All routes prefixed with `/api/v1/plugin-coding-pack`:
+### API Endpoints (21+)
 
-| Method | Endpoint | Purpose |
+All under prefix `/api/v1/plugin-coding-pack`:
+
+- GET /status, /status/health
+- GET /workflows/list, /workflows/{id}
+- POST /workflows/{id}/execute
+- GET /agents/list, /agents/{id}
+- GET /executions/stream (SSE)
+- GET /tasks/{task_id}/workflow-context, /tasks/{task_id}/agent-info
+- GET /board/data, /board/epics/list, /board/filters, /board/summary
+- GET /board/epics/{id}, /board/stories/{id}
+- POST /board/sync, /board/epics, /board/stories
+- PUT /board/status/{id}, /board/epics/{id}, /board/stories/{id}
+
+### Display Customizations (4)
+
+1. **coding-pack-health** — Pack health badge on workflow view
+2. **coding-workflow-info** — Workflow context fields on task view
+3. **coding-pack-agent** — BMAD agent badge on task view (color-coded per agent)
+4. **sprint-progress** — Sprint progress badge on workflow view
+
+## WASM Support
+
+Conditional compilation with `cfg(not(target_arch = "wasm32"))`:
+- Native-only modules: `agent_registry`, `config_injector`, `tool_provider`
+- Native-only dependencies: `async-trait`, `tokio`, `reqwest`
+- WASM target: uses `wit-bindgen 0.53` for component model bindings
+- WASM main() is empty (no-op)
+
+## Plugin Dependencies
+
+| Plugin | Required | Purpose |
 |--------|----------|---------|
-| GET | `/status` | Pack health and validation |
-| GET | `/status/health` | Health badge data |
-| GET | `/workflows/list` | All workflows as table data |
-| GET | `/workflows/{id}` | Workflow detail with steps |
-| POST | `/workflows/{id}/execute` | Trigger workflow execution |
-| POST | `/workflows/execute` | Execute workflow from form |
-| GET | `/agents/list` | BMAD agent roster |
-| GET | `/agents/{id}` | Agent detail |
-| GET | `/executions/stream` | SSE execution event stream |
-| GET | `/board/data` | Kanban board data |
-| GET | `/board/filters` | Board filter definitions |
-| GET | `/board/assignments/{id}` | Assignment detail |
-| GET | `/board/epics/list` | All epics listing |
-| GET | `/board/epics/{id}` | Epic detail with stories |
-| GET | `/tasks/{task_id}/workflow-context` | Task workflow context |
-| GET | `/tasks/{task_id}/agent-info` | Task agent info |
-
-## Workflow System
-
-Workflows are defined as YAML files in `config/workflows/` and declared in `plugin-packs/coding.toml`:
-
-### Coding Workflows
-- **coding-quick-dev** (3 steps) — Small features, quick changes
-- **coding-feature-dev** (5 steps) — Full feature development with architecture design
-- **coding-story-dev** (6 steps) — User story-driven development
-- **coding-bug-fix** (4 steps) — Root cause analysis and fix
-- **coding-refactor** (4 steps) — Safe incremental refactoring
-- **coding-review** (3 steps) — Parallel adversarial + edge case review
-- **coding-parallel-review** — Multi-reviewer parallel code review
-
-### Bootstrap Workflows
-- **bootstrap-plugin** (5 steps) — Develop a single plugin
-- **bootstrap-rebuild** (3 steps) — Rebuild all plugins
-- **bootstrap-cycle** (8 steps) — Full self-evolution cycle
-
-### Utility Workflows
-- **coding-memory-index** — Re-index knowledge graph
-
-### Execution Engine Features
-- DAG-based step dispatch with dependency resolution
-- Retry loops with configurable backoff
-- Parallel step execution
-- Quality gates with pass/fail criteria
-- Context propagation between steps
-- PR extraction and pipeline integration
-- Template variable substitution
-
-## Configuration
-
-### config/config.yaml
-```yaml
-db_path: "pulse.db"          # SQLite database
-log_level: "info"             # Logging level
-plugin_dir: "config/plugins"  # Binary location
-memory:
-  provider: gitnexus          # gitnexus | greptile | none
-  auto_reindex: true
-```
-
-### Provider Config Templates
-Located in `config/provider-configs/_default/`:
-- `AGENT.md` — Agent persona template
-- `RULE.md` — Rule definition template
-- `SKILL.md` — Skill definition template
-
-These templates are injected into workspace provider configurations by `config_injector.rs`.
-
-### Environment Variables
-| Variable | Purpose |
-|----------|---------|
-| `PULSE_DB_PATH` | SQLite connection string (e.g., `sqlite:pulse.db?mode=rwc`) |
-| `PULSE_LLM_PROVIDER` | LLM provider override (optional) |
-| `PULSE_LLM_MODEL` | Model override (optional) |
-
-## Dependencies
-
-### Runtime Dependencies
-- `pulse-plugin-sdk` — Plugin trait definitions and types
-- `serde` / `serde_json` / `serde_yaml` — Serialization
-- `tracing` — Structured logging
-- `reqwest` (non-wasm) — HTTP client for external calls
-- `tokio` + `async-trait` (non-wasm) — Async runtime
-- `wit-bindgen` (wasm32 only) — WASM component model bindings
-
-### Dev Dependencies
-- `pulse-plugin-test` (with `wasm-harness` feature) — Integration test harness
-- `tokio` (full features) — Async test runtime
-- `tempfile` — Temporary file handling in tests
-- `serde_json` — Test assertions
+| bmad-method | Yes | BMAD methodology engine |
+| provider-claude-code | Yes | Claude Code LLM provider |
+| plugin-git-worktree | No | Git worktree management |
+| plugin-memory | No | Knowledge graph / memory |
+| plugin-board | No | Scrum board management |
 
 ## Testing Strategy
 
-- **210 tests** total across Rust and TypeScript
-- **Unit tests** in `src/lib.rs` — Plugin lifecycle, action dispatch, dashboard JSON validity
-- **Integration tests** in `tests/registration_tests.rs` — Plugin registration, action routing
-- **E2E tests** in `tests/e2e_executor_tests.rs` — Workflow execution end-to-end (23+ tests)
-- **E2E module** in `tests/e2e/mod.rs` — Test harness for full pipeline testing
-- **Dashboard tests** in `dashboard/tests/` (TypeScript) — 8 test files covering:
-  - Pack overview, workflow execution, scrum board, card details, filters, ATDD board tests, board tools E2E
-- **Test fixtures** — 15 workflow YAML definitions, 4 mock plugin executables, sample project
-- **Test command**: `cargo test`
+| Layer | Tool | Files | Coverage |
+|-------|------|-------|----------|
+| Unit tests | cargo test (in-module) | 11 src files | Per-module: config parsing, validation, CSV parsing, action dispatch, ACL rules |
+| Integration tests | cargo test (tests/) | registration_tests.rs | SDK PluginRegistry: register(), injection pipeline, tool dispatch, agent routing |
+| E2E tests | cargo test (tests/) | e2e_tests.rs, e2e_executor_tests.rs | Workflow execution end-to-end |
+| Dashboard E2E | Playwright | 7 test files | Dashboard endpoint responses, board operations |
+| Test fixtures | — | tests/fixtures/ | Sample project, mock plugins, 15 workflow YAMLs |
+
+Total: ~6,156 lines of test code across Rust + TypeScript.
+
+## Auto-Dev Loop
+
+The auto-dev system routes tasks to workflows based on labels:
+
+| Label | Workflow |
+|-------|----------|
+| story | coding-story-dev |
+| bug | coding-bug-fix |
+| refactor | coding-refactor |
+| quick | coding-quick-dev |
+| feature | coding-feature-dev |
+| review | coding-review |
+| pr-fix | coding-pr-fix |
+| default | coding-quick-dev |
+
+Configuration: max_retries=3, validation_enabled=true, poll_interval_secs=300

@@ -1,223 +1,234 @@
 # plugin-coding-pack — Development Guide
 
-> Generated: 2026-03-27 | Scan Level: quick | Mode: full_rescan
+> Generated: 2026-03-28 | Scan Level: exhaustive | Mode: full_rescan
 
 ## Prerequisites
 
-| Requirement | Version | Purpose |
-|-------------|---------|---------|
-| Rust | 1.85+ | Core language |
-| Pulse CLI | latest | Plugin host runtime |
-| Claude Code CLI | latest | AI provider (`npm install -g @anthropic-ai/claude-code`) |
-| Git | 2.20+ | Version control |
-| Node.js / npx | 18+ | For GitNexus memory provider |
-| Anthropic API Key | — | Required for Claude Code |
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Rust | 1.85+ | MSRV specified in Cargo.toml |
+| Cargo | Latest stable | Comes with Rust |
+| Pulse CLI | Latest | [pulsate-labs/pulse](https://github.com/pulsate-labs/pulse) |
+| Node.js | 18+ | For Playwright dashboard tests |
+| npm/npx | Latest | For Playwright test runner |
 
-## Environment Setup
+Optional:
+- `wasm32-wasi` target (`rustup target add wasm32-wasi`) for WASM builds
+- SQLite CLI for inspecting `pulse.db`
 
-### Environment Variables
-
-```bash
-export PULSE_DB_PATH=sqlite:pulse.db?mode=rwc   # Required: SQLite connection
-export PULSE_LLM_PROVIDER=anthropic              # Optional: LLM provider
-export PULSE_LLM_MODEL=claude-sonnet-4-6         # Optional: Model override
-```
-
-### Initial Setup
+## Installation
 
 ```bash
-# Clone and enter the project
-cd bmad-method-flow
+# Clone the repository
+git clone <repo-url> pulse-plugins/bmad-method-flow
+cd pulse-plugins/bmad-method-flow
 
-# Build this plugin
-cargo build --release
-
-# Build sibling plugins
-for d in provider-claude-code git-ops git-worktree bmad-method; do
-  (cd ../pulse-plugins/$d && cargo build --release)
-done
-
-# Install all binaries
+# Full install: build this plugin + all sibling plugins
 ./install.sh
 
-# Or skip build and just copy binaries
+# Skip build, only sync binaries (if already built)
 ./install.sh --skip-build
 
-# Validate setup
-PULSE_DB_PATH=sqlite:pulse.db?mode=rwc \
-  pulse registry validate --config ./config
+# Uninstall
+./uninstall.sh
 ```
 
-## Build Commands
+The install script builds and copies binaries for:
+- plugin-coding-pack (this crate)
+- provider-claude-code
+- git-ops
+- git-worktree
+- bmad-method
 
-| Command | Purpose |
-|---------|---------|
-| `cargo build` | Debug build |
-| `cargo build --release` | Release build |
-| `cargo test` | Run all 210 tests |
-| `./install.sh` | Full build + install all plugin binaries |
-| `./install.sh --skip-build` | Install without rebuilding |
-| `./uninstall.sh` | Remove installed binaries |
+All binaries are placed in `config/plugins/`.
 
-## Running Workflows
-
-All workflows are executed via `pulse run`:
+## Build
 
 ```bash
-# Quick development (most common, 3 steps)
-pulse run coding-quick-dev --config ./config \
-  -i '{"input": "Add input validation to login endpoint"}'
+# Debug build
+cargo build
 
-# Full feature development (5 steps)
-pulse run coding-feature-dev --config ./config \
-  -i '{"input": "Implement user notification system"}'
+# Release build
+cargo build --release
 
-# Story-driven development (6 steps)
-pulse run coding-story-dev --config ./config \
-  -i '{"input": "As a user, I want to export CSV reports"}'
-
-# Bug fix (4 steps)
-pulse run coding-bug-fix --config ./config \
-  -i '{"input": "GET /api/profile returns 500 when user_id is null"}'
-
-# Refactoring (4 steps)
-pulse run coding-refactor --config ./config \
-  -i '{"input": "Extract UserService DB operations into Repository pattern"}'
-
-# Code review (3 steps)
-pulse run coding-review --config ./config \
-  -i '{"target": "src/auth/"}'
-
-# Parallel multi-reviewer code review
-pulse run coding-parallel-review --config ./config \
-  -i '{"target": "src/"}'
+# WASM build (requires wasm32-wasi target)
+cargo build --target wasm32-wasi
 ```
 
-## Plugin Management
+### Build Artifacts
+
+| Target | Output | Path |
+|--------|--------|------|
+| Native (debug) | `plugin-coding-pack` binary + `libplugin_coding_pack.so/dylib` | `target/debug/` |
+| Native (release) | Same, optimized | `target/release/` |
+| WASM | `plugin_coding_pack.wasm` | `target/wasm32-wasi/` |
+
+## Running
+
+### As Binary (JSON-RPC stdio mode)
 
 ```bash
-# Check pack health
-pulse exec plugin-coding-pack -i '{"action": "status"}'
+# Direct execution — reads JSON-RPC from stdin, writes to stdout
+cargo run
 
-# Validate all plugins
-pulse exec plugin-coding-pack -i '{"action": "validate-pack"}'
-
-# List workflows
-pulse exec plugin-coding-pack -i '{"action": "list-workflows"}'
-
-# List installed plugins
-pulse exec plugin-coding-pack -i '{"action": "list-plugins"}'
+# With workspace override
+PULSE_WORKSPACE_DIR=/path/to/workspace cargo run
 ```
 
-## Board Operations
+### As Plugin (server mode)
 
-```bash
-# Get Kanban board data
-pulse exec plugin-coding-pack -i '{"action": "board-data"}'
+When loaded by Pulse's plugin-loader, `register()` is called which returns a `PluginRegistration` containing:
+- `HookPoint::ConfigInjector` (BmadAgentInjector)
+- `HookPoint::ToolProvider` (BmadToolProvider)
+- `HookPoint::AgentDefinitionProvider` (BmadAgentRegistry)
 
-# List all epics
-pulse exec plugin-coding-pack -i '{"action": "board-epics-list"}'
+## Configuration
 
-# Get epic detail
-pulse exec plugin-coding-pack -i '{"action": "board-epics/{id}"}'
+### Main Config (`config/config.yaml`)
 
-# Create a new epic
-pulse exec plugin-coding-pack -i '{"action": "board-create-epic", "title": "...", "description": "..."}'
+```yaml
+db_path: "pulse.db"
+log_level: "info"
+plugin_dir: "config/plugins"
 
-# Create a story under an epic
-pulse exec plugin-coding-pack -i '{"action": "board-create-story", "epic_id": "...", "title": "..."}'
+memory:
+  provider: gitnexus    # gitnexus | greptile | none
+  auto_reindex: true
+
+# Optional settings:
+# workflows:
+#   enabled: [coding-quick-dev, coding-bug-fix]  # whitelist
+#   disabled: [bootstrap-cycle]                    # blacklist (takes priority)
+# defaults:
+#   default_model: "fast"
+#   max_budget_usd: 5.0
+# use_injection_pipeline: true
+# auto_dev:
+#   max_retries: 3
+#   max_tasks: 5
+#   skip_validation: false
+# github_sync:
+#   filter_labels: [auto-dev]
+#   filter_milestone: "Sprint 5"
+#   review_poll_interval_secs: 120
+# agent_mesh:
+#   enabled: true
+#   max_depth: 3
+#   agents_yaml_path: "custom/agents.yaml"
 ```
 
-## Tool Provider
+### Auto-Loop Config (`config/auto-loop.yaml`)
 
-```bash
-# List available MCP-style tools
-pulse exec plugin-coding-pack -i '{"action": "list-tools"}'
+Maps task labels to workflow IDs for automatic routing:
 
-# Invoke a tool
-pulse exec plugin-coding-pack -i '{"action": "invoke-tool", "tool": "...", "params": {...}}'
+```yaml
+routing:
+  - label: "story"     → workflow: "coding-story-dev"
+  - label: "bug"       → workflow: "coding-bug-fix"
+  - label: "refactor"  → workflow: "coding-refactor"
+  - label: "quick"     → workflow: "coding-quick-dev"
+  - label: "feature"   → workflow: "coding-feature-dev"
+  - label: "review"    → workflow: "coding-review"
+  - label: "pr-fix"    → workflow: "coding-pr-fix"
+  - default: "coding-quick-dev"
+max_retries: 3
+validation_enabled: true
+poll_interval_secs: 300
 ```
 
-## Bootstrap (Self-Evolution) Workflows
+### Workspace Resolution
 
-```bash
-# Develop a single plugin
-pulse run bootstrap-plugin --config ./config \
-  -i '{"input": "Add step dependency cycle detection to validator"}'
-
-# Rebuild all plugins
-pulse run bootstrap-rebuild --config ./config
-
-# Full self-evolution cycle (8 steps: plan -> implement -> test -> review -> rebuild -> install -> validate -> commit)
-pulse run bootstrap-cycle --config ./config \
-  -i '{"input": "Refactor pack.rs error handling with thiserror"}'
-```
+Priority order:
+1. Explicit `workspace_dir` parameter in action input
+2. `PULSE_WORKSPACE_DIR` environment variable
+3. Inferred from binary path (`{workspace}/config/plugins/plugin-coding-pack`)
+4. Current directory (`.`)
 
 ## Testing
 
-### Running Tests
+### Rust Tests
 
 ```bash
-# Run all tests (210 tests)
+# Run all tests (unit + integration + e2e)
 cargo test
 
-# Run with output
-cargo test -- --nocapture
-
-# Run specific test
-cargo test plugin_health_check_returns_true
-
-# Run only unit tests (fast)
-cargo test --lib
-
-# Run only integration tests
+# Run specific test module
 cargo test --test registration_tests
 cargo test --test e2e_tests
-cargo test --test e2e_executor_tests
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Run a specific test
+cargo test test_name
 ```
 
-### Test Coverage
+### Dashboard E2E Tests (Playwright)
 
-**Rust tests** cover:
-- **Unit tests** (`src/lib.rs`) — Plugin lifecycle, action dispatch, dashboard JSON validity, capability probe
-- **Registration tests** (`tests/registration_tests.rs`) — Plugin registration, action routing, board actions, tool provider
-- **E2E tests** (`tests/e2e_tests.rs`) — End-to-end plugin integration
-- **Executor E2E tests** (`tests/e2e_executor_tests.rs`) — Workflow execution with retry loops, parallel steps, quality gates, context propagation, template variables, working directories, PR extraction
+```bash
+cd dashboard
 
-**Dashboard TypeScript tests** (`dashboard/tests/`):
-- `coding-pack.test.ts` — Pack overview page validation
-- `execute-workflow.test.ts` — Workflow execution form tests
-- `scrum-board.test.ts` — Scrum board rendering
-- `scrum-board-detail.test.ts` — Card detail popup
-- `scrum-board-filters.test.ts` — Board filtering
-- `atdd-scrum-board.test.ts` — Acceptance-driven board tests
-- `board-tools-e2e.test.ts` — Board tools end-to-end tests
+# Install Playwright browsers (first time)
+npx playwright install
+
+# Run all tests
+npx playwright test
+
+# Run with UI
+npx playwright test --ui
+
+# Run specific test file
+npx playwright test tests/scrum-board.test.ts
+```
+
+### Test Structure
+
+| Type | Location | Count | Description |
+|------|----------|-------|-------------|
+| Unit | `src/*.rs` (inline) | ~120+ | Per-module: config parsing, validation, CSV parsing, action dispatch |
+| Integration | `tests/registration_tests.rs` | ~25 | SDK PluginRegistry: register(), injection pipeline, tool dispatch |
+| E2E (Rust) | `tests/e2e_tests.rs`, `tests/e2e_executor_tests.rs` | ~15 | Workflow execution end-to-end |
+| E2E (Dashboard) | `dashboard/tests/*.test.ts` | 7 files | Dashboard endpoint responses, board operations |
+| Fixtures | `tests/fixtures/` | 15 workflows | Happy path, failure paths, timeouts, retries, parallel steps |
 
 ### Test Fixtures
 
-Located in `tests/fixtures/`:
-- `mock-plugins/` — Mock plugin executables (bmad-method, provider-claude-code, mock-slow-cmd, mock-test-runner)
-- `sample-project/` — Minimal Rust project for testing workspace detection
-- `workflows/` — 15 test workflow YAML definitions covering various execution patterns
+Located at `tests/fixtures/`:
+- `sample-project/` — Minimal Cargo.toml + lib.rs for testing
+- `mock-plugins/` — Stub plugin binaries (bmad-method, provider-claude-code, mock-test-runner, mock-slow-cmd)
+- `workflows/` — 15 test workflow YAMLs covering function-only, parallel, optional skip, required fail, timeout, template vars, agent mock, quality gate, retry loop, context flow, missing plugin, working dir, command resolution, PR extraction, worktree extract, autodev simple, autodev with tests
 
-## Project Structure Quick Reference
+## Environment Variables
 
-```
-src/lib.rs              — Main plugin logic, trait impls
-src/main.rs             — CLI entry point
-src/executor.rs         — Workflow execution engine (DAG dispatch)
-src/board.rs            — Scrum board actions
-src/board_store.rs      — Board JSON persistence
-src/tool_provider.rs    — MCP-style tool provisioning
-src/pack.rs             — Pack management and validation
-src/config_injector.rs  — Provider config injection
-src/workspace.rs        — Workspace detection
-src/agent_registry.rs   — Agent definition discovery
-src/test_parser.rs      — Test result parsing
-src/validator.rs        — Workflow/plugin validation
-src/util.rs             — Utility functions
-config/config.yaml      — Runtime configuration
-config/workflows/       — Workflow YAML definitions (11 files)
-plugin-packs/coding.toml — Pack manifest
-dashboard/manifest.json — Dashboard page definitions (11 pages)
-```
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PULSE_API_PORT` | 8080 | Port for Pulse API HTTP fallback |
+| `PULSE_WORKSPACE_DIR` | — | Override workspace root directory |
+| `GREPTILE_API_KEY` | — | API key for Greptile memory provider |
+
+## Key Development Patterns
+
+### Adding a New Pack Action
+1. Add action string match in `pack::execute_action()`
+2. Implement the handler function
+3. If delegated: add bridge function in `plugin_bridge.rs`
+4. Update the "Available" error message in the unknown action handler
+5. Add test in `pack::tests`
+
+### Adding a New LLM Tool
+1. Add constant in `tool_provider.rs` (e.g., `const TOOL_NEW: &str = "bmad_new_tool"`)
+2. Add mapping in `tool_name_to_action()` if wrapping a pack action
+3. Add `ToolDef` to `available_tools()` with appropriate sensitivity
+4. Handle in `execute_tool()` if special logic needed
+5. Add tests
+
+### Adding a New Dashboard Data Endpoint
+1. Add route match in `pack::execute_data_query()`
+2. Implement `*_value()` function returning `serde_json::Value`
+3. Add mock response in `dashboard/mock-responses/`
+4. Add Playwright test in `dashboard/tests/`
+
+### Adding a New BMAD Agent
+1. Add row to `_bmad/_config/agent-manifest.csv`
+2. Update test assertions for agent count (currently 9)
+3. If special ACL needed: add match arm in `agent_registry::get_acl()`
