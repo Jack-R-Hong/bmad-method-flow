@@ -16,7 +16,7 @@ SIBLINGS_DIR="$(dirname "$PLUGIN_DIR")"
 DEST="$PLUGIN_DIR/config/plugins"
 
 # Sibling plugins to build
-SIBLINGS=(provider-claude-code git-ops git-worktree bmad-method)
+SIBLINGS=(provider-claude-code git-ops git-worktree bmad-method plugin-board)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +95,7 @@ declare -A BIN_NAMES=(
   [git-ops]="plugin-git-ops"
   [git-worktree]="plugin-git-worktree"
   [bmad-method]="bmad-method"
+  [plugin-board]="plugin-board"
 )
 
 for name in "${SIBLINGS[@]}"; do
@@ -129,7 +130,7 @@ fi
 header "Validation"
 
 missing=0
-for bin in plugin-coding-pack bmad-method provider-claude-code plugin-git-ops plugin-git-worktree; do
+for bin in plugin-coding-pack bmad-method provider-claude-code plugin-git-ops plugin-git-worktree plugin-board; do
   if [[ -f "$DEST/$bin" ]]; then
     ok "$bin"
   else

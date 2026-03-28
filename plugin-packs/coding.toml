@@ -12,6 +12,7 @@ provider-claude-code = { version = ">=0.1.0", source = "local:../pulse-plugins/p
 plugin-git-ops       = { version = ">=0.1.0", source = "local:../pulse-plugins/git-ops" }
 plugin-git-worktree  = { version = ">=0.1.0", source = "local:../pulse-plugins/git-worktree" }
 bmad-method          = { version = ">=0.1.0", source = "local:../pulse-plugins/bmad-method" }
+plugin-board         = { version = ">=0.1.0", source = "local:../pulse-plugins/plugin-board", optional = true }
 plugin-memory        = { version = ">=0.1.0", source = "local:config/plugins/plugin-memory", optional = true }
 
 [workflows]
